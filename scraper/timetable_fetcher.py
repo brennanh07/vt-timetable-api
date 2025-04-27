@@ -60,7 +60,3 @@ class TimetableFetcher:
             raise RuntimeError(
                 f"An error occurred while fetching the timetable: {req_error}"
             )
-
-        response = requests.post(self.base_url, data=self.payload)
-        response.raise_for_status()
-        return response.text
