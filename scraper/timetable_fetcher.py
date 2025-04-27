@@ -1,6 +1,5 @@
 import requests
 import logging
-import time
 from requests.exceptions import RequestException, HTTPError, Timeout, ConnectionError
 
 
