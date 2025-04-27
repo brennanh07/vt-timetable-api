@@ -1,5 +1,6 @@
 import unittest
 from unittest.mock import patch, MagicMock
+from requests.exceptions import RequestException, HTTPError, Timeout, ConnectionError
 from scraper.timetable_fetcher import TimetableFetcher
 
 
@@ -36,3 +37,45 @@ class TimetableFetcherTest(unittest.TestCase):
         mock_post.assert_called_once_with(
             self.fetcher.base_url, data=self.fetcher.payload
         )
+
+    @patch("scraper.timetable_fetcher.requests.post")
+    def test_fetch_html_timeout(self, mock_post):
+        """Tests that fetch_html() raises RuntimeError on timeout."""
+        mock_post.side_effect = Timeout()
+
+        with self.assertRaises(RuntimeError) as context:
+            self.fetcher.fetch_html()
+
+        self.assertIn("timed out", str(context.exception).lower())
+
+    @patch("scraper.timetable_fetcher.requests.post")
+    def test_fetch_html_http_error(self, mock_post):
+        """Tests that fetch_html() raises RuntimeError on HTTP error."""
+        mock_response = MagicMock()
+        mock_response.raise_for_status.side_effect = HTTPError("404 Client Error")
+        mock_post.return_value = mock_response
+
+        with self.assertRaises(RuntimeError) as context:
+            self.fetcher.fetch_html()
+
+        self.assertIn("http error", str(context.exception).lower())
+
+    @patch("scraper.timetable_fetcher.requests.post")
+    def test_fetch_html_connection_error(self, mock_post):
+        """Tests that fetch_html() raises RuntimeError on connection error."""
+        mock_post.side_effect = ConnectionError()
+
+        with self.assertRaises(RuntimeError) as context:
+            self.fetcher.fetch_html()
+
+        self.assertIn("connection error", str(context.exception).lower())
+
+    @patch("scraper.timetable_fetcher.requests.post")
+    def test_fetch_html_generic_request_exception(self, mock_post):
+        """Tests that fetch_html() raises RuntimeError on general request exception."""
+        mock_post.side_effect = RequestException("Unexpected error")
+
+        with self.assertRaises(RuntimeError) as context:
+            self.fetcher.fetch_html()
+
+        self.assertIn("error occurred", str(context.exception).lower())
