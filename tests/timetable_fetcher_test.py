@@ -35,7 +35,7 @@ class TimetableFetcherTest(unittest.TestCase):
         # ===== Assert =====
         self.assertEqual(actual_html, expected_html)
         mock_post.assert_called_once_with(
-            self.fetcher.base_url, data=self.fetcher.payload
+            self.fetcher.base_url, data=self.fetcher.payload, timeout=10
         )
 
     @patch("scraper.timetable_fetcher.requests.post")
