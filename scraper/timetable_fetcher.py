@@ -1,8 +1,12 @@
 import requests
+import logging
+import time
+from requests.exceptions import RequestException, HTTPError, Timeout, ConnectionError
+
 
 class TimetableFetcher:
-    """Fetches the HTML content of the Virginia Tech Timetable website for a specific term and subject.
-    """
+    """Fetches the HTML content of the Virginia Tech Timetable website for a specific term and subject."""
+
     def __init__(self, term: str, subject: str):
         """Constructs a fetcher with the specified academic term and subject code.
 
@@ -23,7 +27,7 @@ class TimetableFetcher:
             "disp_comments_in": "",
             "sess_code": "%",
             "BTN_PRESSED": "FIND class sections",
-            "inst_name": ""
+            "inst_name": "",
         }
 
     def fetch_html(self) -> str:
@@ -31,7 +35,33 @@ class TimetableFetcher:
 
         Returns:
             str: The HTML content of the timetable page
+
+        Raises:
+            RuntimeError: If there is a network-related error or HTTP error.
         """
+        try:
+            logging.info("Fetching timetable...")
+            response = requests.post(self.base_url, data=self.payload, timeout=10)
+            response.raise_for_status()
+            logging.info("Timetable fetch successful.")
+            return response.text
+        except Timeout:
+            logging.error("The request timed out.")
+            raise RuntimeError("The request timed out.")
+        except HTTPError as http_err:
+            logging.error(f"HTTP error occurred: {http_err}")
+            raise RuntimeError(f"HTTP error occurred: {http_err}")
+        except ConnectionError:
+            logging.error("A connection error occurred.")
+            raise RuntimeError("A connection error occurred.")
+        except RequestException as req_error:
+            logging.error(
+                f"An error occurred while fetching the timetable: {req_error}"
+            )
+            raise RuntimeError(
+                f"An error occurred while fetching the timetable: {req_error}"
+            )
+
         response = requests.post(self.base_url, data=self.payload)
         response.raise_for_status()
         return response.text
