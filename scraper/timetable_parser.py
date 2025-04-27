@@ -2,7 +2,7 @@ from bs4 import BeautifulSoup
 import re
 from timetable_fetcher import TimetableFetcher
 import logging
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -10,9 +10,39 @@ logging.basicConfig(level=logging.DEBUG)
 class TimetableParser:
     """Uses bs4 to parse the HTML content fetched from the Virginia Tech Timetable website"""
 
-    def __init__(self, html: str):
-        self.soup = BeautifulSoup(html, "html.parser")
-        self.subjects = []
+    def __init__(self, fetcher: TimetableFetcher, term: str):
+        """Constructs a new parser with a TimetableFetcher instance and the target term.
+
+        Args:
+            fetcher (TimetableFetcher): An instance of TimetableFetcher
+            term (str): The academic term identifier (e.g., "202509" for Fall 2025)
+        """
+        self.fetcher: TimetableFetcher = fetcher
+        self.term: str = term
+        self.subjects: List[str] = []
+        self.course_data: List[Dict[str, Any]] = []  # to store final structured data
+        self.soup: Optional[BeautifulSoup] = None  # initial soup for subject parsing
+
+    def _initialize_subjects(self) -> bool:
+        """Fetches the initial HTML and parses subjects if not already done."""
+        if self.subjects:
+            return True
+
+        logging.info("Subjects list is empty. Fetching initial page to parse subjects.")
+        initial_html = self.fetcher.fetch_html(subject="%")
+
+        if not initial_html:
+            logging.error("Failed to fetch initial HTML for subject parsing")
+            return False
+
+        self.soup = BeautifulSoup(initial_html, "html.parser")
+        self.parse_subjects(self.term)
+
+        if not self.subjects:
+            logging.error("Failed to parse subjects from the initial page.")
+            return False
+
+        return True
 
     def parse_subjects(self, term: str):
         """
@@ -56,8 +86,7 @@ class TimetableParser:
             # Append the newly found subjects to the main list
             count_before = len(self.subjects)
             self.subjects.extend(parsed_codes)
-            # Optional: Remove duplicates while preserving order if necessary
-            # self.subjects = list(dict.fromkeys(self.subjects))
+
             count_after = len(self.subjects)
             new_codes_count = (
                 count_after - count_before
@@ -110,11 +139,6 @@ class TimetableParser:
                            stripped of leading/trailing whitespace, or None if the block cannot be found
         """
         # Regex to find the block between 'case "{term}":' and the next 'break;'
-        # - `case "{term}"\s*:`: Matches the start, allowing optional whitespace after the colon.
-        # - `(.*?)`: Captures everything non-greedily until the next part.
-        # - `break;`: Matches the end of the case block.
-        # - `re.DOTALL`: Allows '.' to match newline characters.
-        # - `re.IGNORECASE`: Makes 'case' and 'break' case-insensitive (optional but safer).
         pattern = rf'case "{term}"\s*:(.*?)break;'
         match = re.search(pattern, script_text, re.DOTALL | re.IGNORECASE)
 
@@ -194,6 +218,28 @@ class TimetableParser:
 
     def parse_courses(self):
         """TODO: Parses individual course listings for each subject."""
+        if not self._initialize_subjects():
+            logging.error("Could not initialize subjects. Aborting course parsing.")
+            return []
+
+        logging.info(
+            f"Starting course parsing term {self.term} across {len(self.subjects)} subjects."
+        )
+        self.course_data = []  # reset data for this run
+
+        # temp map: {course_key : course_dict}
+        all_courses_map: Dict[str, Dict[str, Any]] = {}
+
+        for subject in self.subjects:
+            logging.info(f"--- Processing subject: {subject} ---")
+            subject_html = self.fetcher.fetch_html(subject=subject)
+
+            if not subject_html:
+                logging.warning(f"Failed to fetch HTML for subject {subject}. Skipping")
+                continue
+
+            subject_soup = BeautifulSoup(subject_html, "html.parser")
+            course_table = subject_soup.find("table", class_="datadisplaytable")
 
 
 if __name__ == "__main__":
