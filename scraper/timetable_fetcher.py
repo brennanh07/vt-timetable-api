@@ -15,14 +15,32 @@ class TimetableFetcher:
             subject (str): The subject code (e.g., "CS" for Computer Science)
         """
         self.base_url = "https://selfservice.banner.vt.edu/ssb/HZSKVTSC.P_ProcRequest"
-        self.default_subject = subject
         self.term = term
 
-        self.payload = {
+        # initialize a persistent session object
+        self.session = requests.Session()
+
+        logging.info("TimetableFetcher initialized with persistent session")
+
+    def fetch_html(self, subject: Optional[str] = "%") -> Optional[str]:
+        """Sends a POST request to the timetable server and returns the raw HTML content.
+
+        Args:
+            subject (Optional[str]): The subject code (e.g., "CS"). Defaults to "%" for all subjects
+
+        Returns:
+            Optional[str]: The HTML content of the timetable page, or None if an error occurs.
+                           Returning None instead of raising allows the parser to continue with other subjects.
+
+        Raises:
+            RuntimeError: If there is a network-related error or HTTP error.
+        """
+        # construct payload dynamically
+        payload = {
             "CAMPUS": "0",
-            "TERMYEAR": term,
+            "TERMYEAR": self.term,
             "CORE_CODE": "AR%",
-            "subj_code": subject,
+            "subj_code": subject if subject is not None else "%",
             "SCHDTYPE": "%",
             "CRSE_NUMBER": "",
             "crn": "",
@@ -33,48 +51,46 @@ class TimetableFetcher:
             "inst_name": "",
         }
 
-        # single persistent session for all requests
-        self.session = requests.Session()
-
-    def fetch_html(self, subject: Optional[str] = None) -> Optional[str]:
-        """Sends a POST request to the timetable server and returns the raw HTML content.
-
-        Returns:
-            str: The HTML content of the timetable page
-
-        Raises:
-            RuntimeError: If there is a network-related error or HTTP error.
-        """
         try:
-            used_subject = subject if subject else self.default_subject
-            payload = self.payload.copy()
-            payload["subj_code"] = used_subject
+            logging.info(
+                f"Fetching timetable for term {self.term}, subject '{subject}'..."
+            )
 
-            logging.info(f"Fetching timetable for subject: {used_subject}...")
+            # use session object to make POST request
+            response = self.session.post(self.base_url, data=payload, timeout=20)
 
-            response = requests.post(self.base_url, data=self.payload, timeout=10)
+            # check for HTTP errors (4xx or 5xx)
             response.raise_for_status()
-            logging.info("Timetable fetch successful.")
+            logging.info(f"Timetable fetch successful for subject '{subject}'.")
+
+            # decode using detected encoding, fall back to utf-8
+            response.encoding = response.apparent_encoding or "utf-8"
             return response.text
+
         except Timeout:
-            logging.error("The request timed out.")
-            raise RuntimeError("The request timed out.")
+            logging.error(f"The request timed out while fetching subject '{subject}'.")
+            return None
+
         except HTTPError as http_err:
-            logging.error(f"HTTP error occurred: {http_err}")
-            raise RuntimeError(f"HTTP error occurred: {http_err}")
-        except ConnectionError:
-            logging.error("A connection error occurred.")
-            raise RuntimeError("A connection error occurred.")
+            logging.error(
+                f"HTTP error occurred fetching subject '{subject}': {http_err} - Status Code: {response.status_code}"
+            )
+            # logging.debug(f"Response Body: {response.text[:500]}...") # Uncomment for debugging server errors
+            return None
+
+        except ConnectionError as conn_err:
+            logging.error(
+                f"A connection error occurred fetching subject '{subject}': {conn_err}"
+            )
+            return None
+
         except RequestException as req_error:
             logging.error(
-                f"An error occurred while fetching the timetable: {req_error}"
+                f"An error occurred fetching subject '{subject}': {req_error}"
             )
-            raise RuntimeError(
-                f"An error occurred while fetching the timetable: {req_error}"
-            )
+            return None  # Return None on other request errors
 
-        return None
-
-    def close(self):
-        """Closes the session when done."""
+    def close_session(self):
+        """Closes the persistent session."""
+        logging.info("Closing TimetableFetcher session.")
         self.session.close()
