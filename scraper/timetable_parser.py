@@ -3,6 +3,7 @@ import re
 from timetable_fetcher import TimetableFetcher
 import logging
 from typing import Optional, List, Dict, Any
+from collections import defaultdict
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -230,6 +231,40 @@ class TimetableParser:
         # temp map: {course_key : course_dict}
         all_courses_map: Dict[str, Dict[str, Any]] = {}
 
+        for subject in self.subjects[1:]:
+            logging.info(f"--- Processing subject: {subject} ---")
+            subject_html = self.fetcher.fetch_html(subject=subject)
+
+            if not subject_html:
+                logging.warning(f"Failed to fetch HTML for subject {subject}. Skipping")
+                continue
+
+            subject_soup = BeautifulSoup(subject_html, "html.parser")
+
+            section_table = subject_soup.find(
+                "table", attrs={"class": "dataentrytable"}
+            )
+            section_rows = section_table.find_all("tr")
+
+            data = []
+            for row in section_rows[1:]:
+                cols = row.find_all("td")
+                cols = [element.text.strip() for element in cols]
+                data.append([element for element in cols if element])
+
+            print(data)
+
+    def analyze_row_types(self):
+        if not self._initialize_subjects():
+            logging.error("Could not initialize subjects. Aborting course parsing.")
+            return []
+
+        logging.info(
+            f"Starting course parsing term {self.term} across {len(self.subjects)} subjects."
+        )
+
+        row_type_counts = defaultdict(int)
+
         for subject in self.subjects:
             logging.info(f"--- Processing subject: {subject} ---")
             subject_html = self.fetcher.fetch_html(subject=subject)
@@ -240,9 +275,26 @@ class TimetableParser:
 
             subject_soup = BeautifulSoup(subject_html, "html.parser")
 
+            section_table = subject_soup.find(
+                "table", attrs={"class": "dataentrytable"}
+            )
+            if not section_table:
+                continue
+
+            section_rows = section_table.find_all("tr")
+
+            for row in section_rows:
+                cells = row.find_all("td")
+                num_cells = len(cells)
+                row_type_counts[num_cells] += 1
+
+        logging.info("Row type analysis complete:")
+        for num_cells, count in sorted(row_type_counts.items()):
+            print(f"Rows with {num_cells} columns: {count}")
+
 
 if __name__ == "__main__":
     fetcher = TimetableFetcher("202509", "%")
-    raw_html = fetcher.fetch_html()
-    parser = TimetableParser(raw_html)
-    parser.parse_subjects("202509")
+    parser = TimetableParser(fetcher=fetcher, term="202509")
+    # parser.parse_courses()
+    parser.analyze_row_types()
