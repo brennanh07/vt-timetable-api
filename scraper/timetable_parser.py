@@ -239,7 +239,6 @@ class TimetableParser:
                 continue
 
             subject_soup = BeautifulSoup(subject_html, "html.parser")
-            course_table = subject_soup.find("table", class_="datadisplaytable")
 
 
 if __name__ == "__main__":
