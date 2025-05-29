@@ -51,6 +51,7 @@ class TimetableFetcher:
             "inst_name": "",
         }
 
+        response = None
         try:
             logging.info(
                 f"Fetching timetable for term {self.term}, subject '{subject}'..."
@@ -72,8 +73,9 @@ class TimetableFetcher:
             return None
 
         except HTTPError as http_err:
+            status_code = response.status_code if response else "N/A"
             logging.error(
-                f"HTTP error occurred fetching subject '{subject}': {http_err} - Status Code: {response.status_code}"
+                f"HTTP error occurred fetching subject '{subject}': {http_err} - Status Code: {status_code}"
             )
             # logging.debug(f"Response Body: {response.text[:500]}...") # Uncomment for debugging server errors
             return None
