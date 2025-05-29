@@ -7,7 +7,7 @@ from typing import Optional
 class TimetableFetcher:
     """Fetches the HTML content of the Virginia Tech Timetable website for a specific term and subject."""
 
-    def __init__(self, term: str, subject: str):
+    def __init__(self, term: str):
         """Constructs a fetcher with the specified academic term and subject code.
 
         Args:
