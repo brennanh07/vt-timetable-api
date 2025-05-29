@@ -35,12 +35,14 @@ class TimetableFetcher:
         Raises:
             RuntimeError: If there is a network-related error or HTTP error.
         """
+        if subject is None:
+            raise TypeError("subject cannot be none")
         # construct payload dynamically
         payload = {
             "CAMPUS": "0",
             "TERMYEAR": self.term,
             "CORE_CODE": "AR%",
-            "subj_code": subject if subject is not None else "%",
+            "subj_code": subject,
             "SCHDTYPE": "%",
             "CRSE_NUMBER": "",
             "crn": "",
