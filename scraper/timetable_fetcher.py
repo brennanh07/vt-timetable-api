@@ -2,6 +2,7 @@ import requests
 import logging
 from requests.exceptions import RequestException, HTTPError, Timeout, ConnectionError
 from typing import Optional
+from tidylib import tidy_document
 
 
 class TimetableFetcher:
@@ -35,14 +36,12 @@ class TimetableFetcher:
         Raises:
             RuntimeError: If there is a network-related error or HTTP error.
         """
-        if subject is None:
-            raise TypeError("subject cannot be none")
         # construct payload dynamically
         payload = {
             "CAMPUS": "0",
             "TERMYEAR": self.term,
             "CORE_CODE": "AR%",
-            "subj_code": subject,
+            "subj_code": subject if subject is not None else "%",
             "SCHDTYPE": "%",
             "CRSE_NUMBER": "",
             "crn": "",
@@ -68,7 +67,8 @@ class TimetableFetcher:
 
             # decode using detected encoding, fall back to utf-8
             response.encoding = response.apparent_encoding or "utf-8"
-            return response.text
+
+            return self.fix_html(response.text)
 
         except Timeout:
             logging.error(f"The request timed out while fetching subject '{subject}'.")
@@ -93,6 +93,10 @@ class TimetableFetcher:
                 f"An error occurred fetching subject '{subject}': {req_error}"
             )
             return None  # Return None on other request errors
+
+    def fix_html(self, html: str) -> str:
+        cleaned, errors = tidy_document(html)
+        return cleaned
 
     def close_session(self):
         """Closes the persistent session."""
