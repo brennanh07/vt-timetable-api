@@ -575,6 +575,9 @@ def main(term: str, output_file: str) -> bool:
     except Exception as e:
         logging.error(f"Main function failed: {e}")
         return False
+    finally:
+        if fetcher:
+            fetcher.close_session()
 
 
 # ===================================================================
