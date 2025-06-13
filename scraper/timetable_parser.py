@@ -31,8 +31,6 @@ DAY_MAPPING = {
 # ======================================================
 # Helper Functions
 # ======================================================
-
-
 def parse_time(time_str: Optional[str]) -> str:
     """Convert the time string from 12-hour format to 24-hour format.
 
