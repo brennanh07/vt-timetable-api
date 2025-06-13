@@ -590,4 +590,4 @@ if __name__ == "__main__":
     if success:
         print("Course scraping completed successfully")
     else:
-        print("Course scraping failed. Check parse.log for details")
+        print("Course scraping failed. Check timetable_parser.log for details")
