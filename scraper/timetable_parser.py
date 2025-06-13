@@ -1,784 +1,588 @@
-import re
-import logging
 from bs4 import BeautifulSoup, Tag
-from typing import List, Optional, Dict, Any
-from datetime import datetime
-from scraper.timetable_fetcher import TimetableFetcher
+import json
+from timetable_fetcher import TimetableFetcher
+import re
+from collections import defaultdict
+from typing import Any, Optional
+import logging
 
-# --- Configure logging (Set level to DEBUG to see detailed logs) ---
-# logging.basicConfig(level=logging.DEBUG, format='%(levelname)s:%(name)s:%(message)s')
+logging.basicConfig(
+    filename="parse.log",
+    filemode="w",
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+)
+
+SectionData = dict[str, Any]
+CourseMap = dict[str, list[SectionData]]
+SubjectMap = dict[str, CourseMap]
+
+DAY_MAPPING = {
+    "M": 1,
+    "T": 2,
+    "W": 3,
+    "R": 4,
+    "F": 5,
+    "S": 6,
+    "U": 7,
+}
 
 
-class TimetableParser:
+# ======================================================
+# Helper Functions
+# ======================================================
+def parse_time(time_str: Optional[str]) -> str:
+    """Convert the time string from 12-hour format to 24-hour format.
+
+    Handles university timetable time formats and converts them to standardized
+    24-hour format for consistent data processing.
+
+    Args:
+        time_str(Optional[str]): Time string in format "HH:MMAM/PM" or special
+                                 arranged time indicators like "----- (ARR) -----"
+
+    Returns:
+        str: Time in 24-hour format "HH:MM" or "ARR" for arranged times
     """
-    Parses subjects and course details from HTML content fetched
-    from the Virginia Tech Timetable website using a TimetableFetcher.
+    if not time_str or time_str == "----- (ARR) -----":
+        return "ARR"
+
+    time_part = time_str[:-2].strip()
+    am_pm = time_str[-2:].strip()
+
+    hour, minute = map(int, time_part.split(":"))
+
+    if am_pm == "PM" and hour != 12:
+        hour += 12
+    elif am_pm == "AM" and hour == 12:
+        hour = 0
+
+    # format specifier:
+    # 0 - pad with zeros
+    # 2 - min width of 2 chars
+    # d - decimal integer format
+    return f"{hour:02d}:{minute:02d}"
+
+
+def safe_extract_text(element: Tag, selector: Optional[str] = None) -> Optional[str]:
+    """Safely extract text content from BeautifulSoup HTML elements.
+
+    Provides text extraction with CSS selector support and handles
+    edge cases like None elements, empty text, and "N/A" values.
+
+    Args:
+        element (Tag): BeautifulSoup Tag element to extract text from
+        selector (Optional[str]): Optional CSS selector to find child elements first
+
+    Returns:
+        Optional[str]: Extracted text content, or None if extractino fails or
+                       text is empty/invalid
     """
-
-    def __init__(self, fetcher: TimetableFetcher, term: str):
-        """
-        Initializes the parser with a TimetableFetcher instance and the target term.
-
-        Args:
-            fetcher (TimetableFetcher): An instance of TimetableFetcher.
-            term (str): The academic term identifier (e.g., "202509").
-        """
-        if not isinstance(fetcher, TimetableFetcher):
-            raise TypeError("Input 'fetcher' must be a TimetableFetcher object.")
-        self.fetcher: TimetableFetcher = fetcher
-        self.term: str = term
-        self.subjects: List[str] = []
-        self.courses_data: List[Dict[str, Any]] = []  # To store final structured data
-        self.soup: Optional[BeautifulSoup] = None  # Initial soup for subject parsing
-
-    def _initialize_subjects(self):
-        """Fetches the initial HTML and parses subjects if not already done."""
-        if not self.subjects:
-            logging.info(
-                "Subjects list is empty. Fetching initial page to parse subjects."
-            )
-            initial_html = self.fetcher.fetch_html(subject="%")
-            if not initial_html:
-                logging.error("Failed to fetch initial HTML for subject parsing.")
-                return False
-
-            self.soup = BeautifulSoup(initial_html, "html.parser")
-
-            # Store length before parsing
-            subjects_before = len(self.subjects)
-            self.parse_subjects(self.term)
-            # Store length after parsing
-            subjects_after = len(self.subjects)
-
-            # Check if any subjects were actually found *and added* during this call
-            if subjects_after == subjects_before or not self.subjects:
-                # Log error only if parsing was attempted but yielded nothing *new*
-                # and the list is still empty overall.
-                if not self.subjects:
-                    logging.error("Failed to parse subjects from the initial page.")
-                # Return False if no subjects were effectively initialized
-                return False
-
-            logging.info(
-                f"Initialized {len(self.subjects)} subjects for term {self.term}."
-            )
-        # If self.subjects was already populated, or if parsing succeeded, return True
-        return True
-
-    # --- Public Methods ---
-    def parse_subjects(self, term: str):
-        """
-        Extracts subject codes for a specified term by parsing JavaScript within the page source.
-        Requires self.soup to be initialized.
-        """
-        if not self.soup:
-            logging.error("Cannot parse subjects, self.soup is not initialized.")
-            return
-        logging.info(f"Starting subject parsing for term: {term}")
-        script_text = self._find_term_script_text(term)
-        if script_text is None:
-            logging.error(
-                f"Processing stopped: Could not find script text for term '{term}'."
-            )
-            return
-        term_script_block = self._extract_term_script_block(script_text, term)
-        if term_script_block is None:
-            logging.error(
-                f"Processing stopped: Could not extract script block for term '{term}'."
-            )
-            return
-
-        parsed_codes_raw = self._parse_subject_codes_from_block(term_script_block)
-
-        # Use dict.fromkeys to preserve order while getting unique codes
-        parsed_codes_unique_this_call = list(dict.fromkeys(parsed_codes_raw))
-
-        if not parsed_codes_unique_this_call:  # Check the de-duplicated list
-            logging.warning(
-                f"No unique subject codes were successfully parsed for term '{term}'."
-            )
-        else:
-            count_before = len(self.subjects)
-            # Now check these unique codes against codes already present in self.subjects
-            unique_new_codes = [
-                code
-                for code in parsed_codes_unique_this_call
-                if code not in self.subjects
-            ]
-            self.subjects.extend(unique_new_codes)
-            count_after = len(self.subjects)
-            new_codes_count = count_after - count_before
-            logging.info(
-                f"Successfully parsed and added {new_codes_count} unique subject codes for term '{term}'. Total subjects now: {count_after}"
-            )
-
-    def parse_courses(self) -> List[Dict[str, Any]]:
-        """
-        Parses course listings for all subjects for the initialized term.
-        Iterates through subjects, fetches HTML for each, parses the course table,
-        and structures the data according to the Course/Section/MeetingTime model.
-        Returns a list of dictionaries representing Courses, ready for JSON serialization.
-        """
-        if not self._initialize_subjects():
-            logging.error("Could not initialize subjects. Aborting course parsing.")
-            return []
-
-        logging.info(
-            f"Starting course parsing for term {self.term} across {len(self.subjects)} subjects."
-        )
-        self.courses_data = []
-        all_courses_map: Dict[str, Dict[str, Any]] = {}
-
-        for subject in self.subjects:
-            logging.info(f"--- Processing Subject: {subject} ---")
-            subject_html = self.fetcher.fetch_html(subject=subject)
-            if not subject_html:
-                logging.warning(
-                    f"Failed to fetch HTML for subject {subject}. Skipping."
-                )
-                continue
-
-            subject_soup = BeautifulSoup(subject_html, "html.parser")
-            search_results_div = subject_soup.find("div", class_="class1")
-            course_table = None
-            if search_results_div:
-                course_table = search_results_div.find("table", class_="dataentrytable")
-                if course_table:
-                    logging.debug(
-                        f"Found course table (class='dataentrytable') inside div.class1 for subject {subject}."
-                    )
-                else:
-                    logging.warning(
-                        f"Found div.class1 but could not find table.dataentrytable within it for subject {subject}."
-                    )
-            else:
-                logging.warning(
-                    f"Could not find search results div (class='class1') for subject {subject}. Table finding might fail."
-                )
-                course_table = subject_soup.find("table", class_="dataentrytable")
-                if course_table:
-                    logging.debug(
-                        f"Found course table (class='dataentrytable') using fallback search for subject {subject}."
-                    )
-
-            if not course_table:
-                logging.warning(
-                    f"Could not find course table for subject {subject}. Skipping."
-                )
-                continue
-
-            rows = course_table.find_all("tr")
-            logging.debug(
-                f"Found {len(rows)} total <tr> elements in the identified table for subject {subject}."
-            )
-
-            if len(rows) < 2:
-                logging.info(
-                    f"No data rows (found {len(rows)} total rows, need >= 2) in table for subject {subject}."
-                )
-                continue
-
-            current_course_key = None
-            current_section_crn = None
-
-            for i, row in enumerate(rows[1:], 1):
-                cells = row.find_all("td", recursive=False)
-                num_cells = len(cells)
-                cell_preview = [c.get_text(strip=True)[:20] for c in cells[:5]]
-                logging.debug(
-                    f"Row {i + 1} ({num_cells} cells): Preview={cell_preview}..."
-                )
-
-                if num_cells == 0:
-                    logging.debug(f"Skipping empty row {i + 1}.")
-                    continue
-
-                # --- Try parsing as Additional Time Row First ---
-                # _parse_additional_meeting_row now returns a LIST of meeting times
-                additional_meeting_list = self._parse_additional_meeting_row(cells)
-                if (
-                    additional_meeting_list is not None
-                ):  # Check for None explicitly (empty list [] is valid for TBA/ARR)
-                    logging.debug(
-                        f"Row {i + 1} successfully parsed as additional meeting(s): {additional_meeting_list}"
-                    )
-                    if current_course_key and current_section_crn:
-                        if current_course_key in all_courses_map:
-                            course = all_courses_map[current_course_key]
-                            section_found = False
-                            for section in reversed(course["courseSections"]):
-                                if section["crn"] == current_section_crn:
-                                    # Use extend to add all items from the list
-                                    section["meetingTimes"].extend(
-                                        additional_meeting_list
-                                    )
-                                    logging.debug(
-                                        f"Extended meeting times for CRN {current_section_crn} with {len(additional_meeting_list)} new time(s)."
-                                    )
-                                    section_found = True
-                                    break
-                            if not section_found:
-                                logging.warning(
-                                    f"Found additional meeting time(s) row {i + 1}, but couldn't find matching section CRN {current_section_crn} in course {current_course_key}"
-                                )
-                        else:
-                            logging.warning(
-                                f"Found additional meeting time(s) row {i + 1}, but course key {current_course_key} not found in map."
-                            )
-                    else:
-                        logging.warning(
-                            f"Found additional meeting time(s) row {i + 1} but no current section context (CRN)."
-                        )
-                    continue  # Processed as additional time, move to next row
-
-                # --- If not additional time, try to parse as a new section/course row ---
-                parsed_section_data = self._parse_section_row(cells, subject)
-                if parsed_section_data:
-                    logging.debug(
-                        f"Row {i + 1} successfully parsed as section CRN {parsed_section_data['crn']}."
-                    )
-                    course_number_int = 0
-                    try:
-                        num_match = re.match(
-                            r"^(\d+)", parsed_section_data["courseNumber"]
-                        )
-                        if num_match:
-                            course_number_int = int(num_match.group(1))
-                        else:
-                            logging.warning(
-                                f"Could not extract numeric part from course number {parsed_section_data['courseNumber']} for CRN {parsed_section_data['crn']}"
-                            )
-                    except ValueError:
-                        logging.warning(
-                            f"Could not convert extracted course number part to int for {parsed_section_data['courseNumber']}"
-                        )
-
-                    course_key = f"{parsed_section_data['subject']}-{course_number_int}"
-                    current_course_key = course_key
-                    current_section_crn = parsed_section_data["crn"]
-
-                    if course_key not in all_courses_map:
-                        all_courses_map[course_key] = {
-                            "name": parsed_section_data["courseName"],
-                            "subject": parsed_section_data["subject"],
-                            "courseNumber": course_number_int,
-                            "courseSections": [],
-                        }
-                        logging.debug(f"Created new course entry: {course_key}")
-
-                    section_to_add = {
-                        "crn": current_section_crn,
-                        "meetingTimes": parsed_section_data["meetingTimes"],
-                        "examCode": parsed_section_data["examCode"],
-                        "instructor": parsed_section_data["instructor"],
-                        "capacity": parsed_section_data["capacity"],
-                        "sectionType": parsed_section_data["sectionType"],
-                        "credits": parsed_section_data["credits"],
-                        "mode": parsed_section_data["mode"],
-                    }
-                    all_courses_map[course_key]["courseSections"].append(section_to_add)
-                    logging.debug(
-                        f"Added section CRN {current_section_crn} to course {course_key}"
-                    )
-
-                # --- Row didn't match expected structure for section or additional time ---
-                elif (
-                    additional_meeting_list is None
-                ):  # Only log/reset if not already handled as additional time
-                    logging.debug(
-                        f"Skipping row {i + 1}: Did not match section or additional time structure. Cell count: {num_cells}. Content preview: {cell_preview}..."
-                    )
-                    # Reset context only if we are sure it's not related to the previous section
-                    # Keep context if it might be a comment or separator row related to the last section
-                    # current_section_crn = None # Keep context for now
-                    # current_course_key = None
-
-        self.courses_data = list(all_courses_map.values())
-        logging.info(
-            f"Finished course parsing. Found {len(self.courses_data)} courses total."
-        )
-        return self.courses_data
-
-    # --- Internal Helper Methods ---
-
-    def _find_term_script_text(self, term: str) -> Optional[str]:
-        """Finds the text content of the script tag containing the specified term's data."""
-        # (Implementation remains the same)
-        if not self.soup:
-            return None
-        script_tags = self.soup.find_all("script")
-        if not script_tags:
-            logging.warning("No <script> tags found in the provided soup object.")
-            return None
-        term_marker = f'case "{term}"'
-        for script_tag in script_tags:
-            if script_tag.string:
-                script_content = script_tag.string
-                if term_marker in script_content:
-                    logging.debug(
-                        f"Found script tag containing marker for term '{term}'."
-                    )
-                    return script_content
-        logging.error(
-            f"Could not find a script tag containing the marker '{term_marker}' for term '{term}'."
-        )
+    if not element or not isinstance(element, Tag):
         return None
 
-    def _extract_term_script_block(self, script_text: str, term: str) -> Optional[str]:
-        """Extracts the block of JavaScript code specific to the term."""
-        # (Implementation remains the same)
-        pattern = rf'case "{term}"\s*:(.*?)break;'
-        match = re.search(pattern, script_text, re.DOTALL | re.IGNORECASE)
-        if match:
-            extracted_block = match.group(1).strip()
-            logging.debug(f"Successfully extracted script block for term '{term}'.")
-            return extracted_block
-        else:
-            logging.error(
-                f"Could not extract the script block for term '{term}'. Regex pattern '{pattern}' did not find a match."
-            )
+    if selector:
+        found = element.find(selector)
+        if not found:
             return None
+        element = found
 
-    def _parse_subject_codes_from_block(self, script_block: str) -> List[str]:
-        """Parses individual subject codes from the extracted JavaScript block."""
-        # (Implementation remains the same)
-        subject_codes: List[str] = []
-        lines = script_block.splitlines()
-        line_pattern = re.compile(r'new Option\(".*?",\s*"(.*?)"', re.IGNORECASE)
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            if "All Subjects" in line and "new Option" in line:
-                logging.debug(f"Skipping 'All Subjects' line: {line}")
-                continue
-            match = line_pattern.search(line)
-            if not match:
-                if "new Option" in line and not line.startswith("//"):
-                    logging.warning(
-                        f"Regex did not find subject code pattern in line: {line}"
-                    )
-                continue
-            subject_code = match.group(1)
-            if not re.match(r"^[A-Z0-9]+$", subject_code):
-                logging.warning(
-                    f"Extracted value '{subject_code}' from line '{line}' does not match expected format."
-                )
-                continue
-            subject_codes.append(subject_code)
-            logging.debug(f"Extracted subject code: {subject_code}")
-        return subject_codes
+    text = element.get_text(strip=True)
 
-    def _parse_section_row(
-        self, cells: List[Tag], subject: str
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Attempts to parse a table row (list of <td> tags) as a new course section.
-        Handles standard 13-column rows and common edge cases with fewer columns.
-        Returns a dictionary with section details or None.
-        """
-        # (Implementation remains the same as v17)
-        IDX_CRN = 0
-        IDX_SUBJ_COURSE = 1
-        IDX_TITLE = 2
-        IDX_TYPE = 3
-        IDX_MODE = 4
-        IDX_CREDITS = 5
-        IDX_CAP_TOTAL = 6
-        IDX_INSTRUCTOR = 7
-        IDX_DAYS = 8
-        IDX_START_TIME = 9
-        IDX_END_TIME = 10
-        IDX_LOCATION = 11
-        IDX_EXAM = 12
-        MIN_EXPECTED_CELLS = 8
-        EXPECTED_FULL_CELL_COUNT = 13
+    return text if text and text != "" and text != "N/A" else None
 
-        num_cells = len(cells)
-        if num_cells < MIN_EXPECTED_CELLS:
-            logging.debug(
-                f"Skipping row as section: Too few cells ({num_cells} < {MIN_EXPECTED_CELLS})."
-            )
-            return None
 
-        crn_link = cells[IDX_CRN].find("a")
-        crn_tag = crn_link.find("b") if crn_link else None
-        crn_text = crn_tag.get_text(strip=True) if crn_tag else ""
-        if not crn_text.isdigit():
-            logging.debug(
-                f"Skipping row as section: Cell {IDX_CRN} CRN text '{crn_text}' is not numeric or not found in expected tags."
-            )
-            return None
+def is_additional_times_row(cols: list[Tag], expected_length: int) -> bool:
+    """Check if a table row contains additional meeting times for a course section.
 
-        logging.debug(f"Attempting to parse row as section CRN {crn_text}...")
-        try:
-            crn = int(crn_text)
+    Identifies rows that specify additional meeting times for previously parsed
+    course sections by looking for the "* Additional Times *" marker.
 
-            def get_cell_text(index, default=""):
-                return (
-                    cells[index].get_text(strip=True) if index < num_cells else default
-                )
+    Args:
+        cols (list[Tag]): List of table cell elements from the row
+        expected_length (int): Expected number of columns in the row
 
-            subj_course_text = get_cell_text(IDX_SUBJ_COURSE)
-            course_match = re.match(r"([A-Z]+)\s*-\s*(\d+[A-Z]*)", subj_course_text)
-            course_number_str = course_match.group(2) if course_match else "0"
-            parsed_subject = course_match.group(1) if course_match else subject
-            if course_number_str == "0":
-                logging.warning(
-                    f"Could not parse course number from '{subj_course_text}' for CRN {crn}. Skipping section."
-                )
-                return None
+    Returns:
+        bool: True if row contains additional times marker, False otherwise
+    """
+    if not cols or len(cols) != expected_length:
+        return False
 
-            course_name = get_cell_text(IDX_TITLE)
-            type_text = get_cell_text(IDX_TYPE)
-            mode_str = get_cell_text(IDX_MODE)
-            section_type = self._map_section_type(type_text, mode_str)
-            credits_text = get_cell_text(IDX_CREDITS)
-            credits_val = 0
-            if re.match(r"^\d+(\.\d+)?$", credits_text):
-                credits_val = int(float(credits_text))
-            elif " TO " in credits_text.upper():
-                range_match = re.search(
-                    r"(\d+)\s+TO\s+\d+", credits_text, re.IGNORECASE
-                )
-                if range_match:
-                    try:
-                        credits_val = int(range_match.group(1))
-                        logging.debug(
-                            f"Parsed variable credit '{credits_text}' as {credits_val} for CRN {crn}."
-                        )
-                    except ValueError:
-                        logging.warning(
-                            f"Could not parse lower bound from credit range '{credits_text}' for CRN {crn}."
-                        )
-                else:
-                    logging.warning(
-                        f"Unusual credit range format '{credits_text}' for CRN {crn}."
-                    )
-            elif credits_text:
-                logging.debug(
-                    f"Unusual credit format '{credits_text}' for CRN {crn}. Defaulting to 0."
-                )
+    col_four = cols[4]
+    if not col_four:
+        return False
 
-            capacity_text = get_cell_text(IDX_CAP_TOTAL)
-            capacity = int(capacity_text) if capacity_text.isdigit() else 0
+    b_element = col_four.find("b")
+    return (
+        b_element is not None
+        and b_element.get_text(strip=True) == "* Additional Times *"
+    )
 
-            instructor_text = get_cell_text(IDX_INSTRUCTOR)
-            instructor = (
-                instructor_text
-                if instructor_text and instructor_text != "N/A"
-                else "Staff"
-            )
 
-            meeting_times = []
-            if num_cells >= IDX_LOCATION + 1:
-                meeting_times = self._parse_meeting_time_cells(
-                    cells, IDX_DAYS, IDX_START_TIME, IDX_END_TIME, IDX_LOCATION
-                )
-            else:
-                logging.debug(
-                    f"Meeting time columns missing or insufficient for CRN {crn} (found {num_cells} cells)."
-                )
+# ====================================================================
+# Data Parsing (depend on helper functions)
+# ====================================================================
 
-            exam_code = ""
-            if num_cells >= IDX_EXAM + 1:
-                exam_link = cells[IDX_EXAM].find("a")
-                exam_code = exam_link.get_text(strip=True) if exam_link else ""
-            else:
-                logging.debug(
-                    f"Exam column missing for CRN {crn} (found {num_cells} cells)."
-                )
 
-            if not meeting_times:
-                days_val = get_cell_text(IDX_DAYS, "").upper()
-                start_time_val = get_cell_text(IDX_START_TIME, "")
-                loc_val = get_cell_text(IDX_LOCATION, "").upper()
-                if (
-                    "(ARR)" in days_val
-                    or "TBA" in days_val
-                    or "-----" in start_time_val
-                    or "ONLINE" in loc_val
-                    or "TBA" in loc_val
-                ):
-                    logging.debug(
-                        f"CRN {crn} has no specific meeting times (ARR/TBA/Online)."
-                    )
-                elif section_type not in [
-                    "ONLINE_ASYNCHRONOUS",
-                    "INDEPENDENT_STUDY",
-                    "RESEARCH",
-                    "OTHER",
-                ]:
-                    logging.warning(
-                        f"Section CRN {crn} parsed but has no meeting times and isn't typically async/arranged type ({section_type})."
-                    )
+def parse_new_section_data(
+    cols: list[Tag], row_type: str
+) -> Optional[dict[str, Optional[str]]]:
+    """Parse course section data from timetable table row columns.
 
-            return {
-                "crn": crn,
-                "subject": parsed_subject,
-                "courseNumber": course_number_str,
-                "courseName": course_name,
-                "sectionType": section_type,
-                "capacity": capacity,
-                "instructor": instructor,
-                "examCode": exam_code,
-                "meetingTimes": meeting_times,
-                "credits": credits_val,
-                "mode": mode_str,
-            }
-        except (ValueError, AttributeError, TypeError) as e:
-            logging.warning(
-                f"Error processing potential section row CRN {crn_text}: {e} - Row Preview: {[c.get_text(strip=True)[:20] for c in cells]}"
-            )
-            return None
-        except IndexError:
-            logging.warning(
-                f"Index error processing section row CRN {crn_text}. Row Preview: {[c.get_text(strip=True)[:20] for c in cells]}"
-            )
-            return None
+    Extracts structured course information from HTML table cells based on
+    the row type (arranged vs regular schedule). Handles different column
+    layouts for different types of courses.
 
-    def _parse_additional_meeting_row(
-        self, cells: List[Tag]
-    ) -> Optional[List[Dict[str, str]]]:
-        IDX_MARKER_CELL = 4
-        MIN_CELLS_FOR_MARKER_CHECK = IDX_MARKER_CELL + 1
-        num_cells = len(cells)
+    Args:
+        cols (list[Tag]): List of table cell elements containing course data
+        row_type (str): Type of row - "arranged" for flexible schedule courses,
+                       "regular" for standard scheduled courses
 
-        # --- Basic marker checks ---
-        if num_cells < MIN_CELLS_FOR_MARKER_CHECK:
-            return None
-        marker_cell = cells[IDX_MARKER_CELL]
-        has_colspan = marker_cell.has_attr("colspan")
-        marker_cell_text = marker_cell.get_text(strip=True)
-        is_additional_time_marker = "* Additional Times *" in marker_cell_text
-        if not (has_colspan and is_additional_time_marker):
-            return None
-        is_prev_empty = all(not c.get_text(strip=True) for c in cells[:IDX_MARKER_CELL])
-        if not is_prev_empty:
-            return None
-        # --- End basic checks ---
+    Returns:
+        Optional[dict[str, Optional[str]]]: Dictionary containing parsed course
+                                           data fields, or None if parsing fails
+    """
+    if row_type == "arranged":
+        return {
+            "crn": safe_extract_text(cols[0], "b"),
+            "course": safe_extract_text(cols[1], "font"),
+            "title": safe_extract_text(cols[2]),
+            "schedule_type": safe_extract_text(cols[3]),
+            "modality": safe_extract_text(cols[4], "p"),
+            "credit_hours": safe_extract_text(cols[5]),
+            "capacity": safe_extract_text(cols[6]),
+            "instructor": safe_extract_text(cols[7]),
+            "days": safe_extract_text(cols[8]),
+            "time": safe_extract_text(cols[9]),
+            "location": safe_extract_text(cols[10]),
+            "exam_code": safe_extract_text(cols[11], "a"),
+        }
 
-        logging.debug(
-            f"Attempting to parse row as additional time... (Cell count: {num_cells})"
+    elif row_type == "regular":
+        return {
+            "crn": safe_extract_text(cols[0], "b"),
+            "course": safe_extract_text(cols[1], "font"),
+            "title": safe_extract_text(cols[2]),
+            "schedule_type": safe_extract_text(cols[3]),
+            "modality": safe_extract_text(cols[4], "p"),
+            "credit_hours": safe_extract_text(cols[5]),
+            "capacity": safe_extract_text(cols[6]),
+            "instructor": safe_extract_text(cols[7]),
+            "days": safe_extract_text(cols[8]),
+            "begin_time": safe_extract_text(cols[9]),
+            "end_time": safe_extract_text(cols[10]),
+            "location": safe_extract_text(cols[11]),
+            "exam_code": safe_extract_text(cols[12], "a"),
+        }
+
+    logging.warning(f"Row type not recognized: {row_type}")
+    return {}
+
+
+def determine_meeting_times(
+    days: Optional[str], begin_time: Optional[str], end_time: Optional[str] = None
+) -> list:
+    """Convert course meeting days and times into structured meeting time objects.
+
+    Processes course schedule information and creates meeting time objects
+    with day numbers and formatted times. Handles arranged schedules and
+    converts day abbreviations to numeric values.
+
+    Args:
+        days (Optional[str]): Space-separated day abbreviations (e.g., "M W F")
+        begin_time (Optional[str]): Start time in 12-hour format
+        end_time (Optional[str]): End time in 12-hour format, defaults to begin_time
+
+    Returns:
+        list: List of meeting time dictionaries with day, begin_time, end_time,
+              or ["ARR"] for arranged schedules
+    """
+    if not days or days == "(ARR)":
+        return ["ARR"]
+
+    # for async/arranged classes, begin and times are the same
+    if end_time is None:
+        end_time = begin_time
+
+    formatted_begin_time = parse_time(begin_time)
+    formatted_end_time = parse_time(end_time)
+
+    meeting_times = []
+    for day in days.split():
+        meeting_time = {
+            "day": DAY_MAPPING[day],
+            "begin_time": formatted_begin_time,
+            "end_time": formatted_end_time,
+        }
+        meeting_times.append(meeting_time)
+
+    return meeting_times
+
+
+def create_section_object(
+    parsed_data: dict[str, Optional[str]], meeting_times: Optional[list[dict[str, Any]]]
+) -> SectionData:
+    """Create a standardized course section object from parsed data.
+
+    Combines parsed course information and meeting times into a structured
+    section object with consistent field names and data types.
+
+    Args:
+        parsed_data (dict[str, Optional[str]]): Dictionary of parsed course fields
+        meeting_times (Optional[list[dict[str, Any]]]): List of meeting time objects
+
+    Returns:
+        SectionData: Structured course section object ready for JSON serialization
+    """
+    return {
+        "crn": parsed_data.get("crn"),
+        "course": parsed_data.get("course"),
+        "title": parsed_data.get("title"),
+        "schedule_type": parsed_data.get("schedule_type"),
+        "modality": parsed_data.get("modality"),
+        "credit_hours": parsed_data.get("credit_hours"),
+        "capacity": parsed_data.get("capacity"),
+        "instructor": parsed_data.get("instructor"),
+        "meeting_times": meeting_times
+        if meeting_times and len(meeting_times) > 0
+        else None,
+        "location": parsed_data.get("location"),
+        "exam_code": parsed_data.get("exam_code"),
+    }
+
+
+# ======================================================================
+# Row Processing (depend on data parsing functions)
+# ======================================================================
+
+
+def parse_additional_times_row(
+    cols: list[Tag],
+    course_sections_map: dict[str, list[dict[str, Any]]],
+    curr_course: str,
+    is_online: bool = False,
+) -> None:
+    """Parse and add additional meeting times to the most recent course section.
+
+    Processes table rows marked with "* Additional Times *" and appends
+    the meeting times to the previously parsed course section. Handles
+    different column layouts for online vs in-person additional times.
+
+    Args:
+        cols (list[Tag]): List of table cell elements from the additional times row
+        course_sections_map (dict[str, list[dict[str, Any]]]): Map of courses to sections
+        curr_course (str): Current course code being processed
+        is_online (bool): Whether this is an online course format
+
+    Returns:
+        None: Modifies the course_sections_map in place
+    """
+    if not curr_course or curr_course not in course_sections_map:
+        logging.warning("No current course or not in sections map")
+        return
+
+    if not course_sections_map[curr_course]:
+        logging.warning(
+            f"No sections found to add additional time for course: {curr_course}"
         )
-        try:
-            idx_days, idx_start, idx_end, idx_loc = -1, -1, -1, -1
+        return
 
-            # --- REVISED AND CONFIRMED INDEX LOGIC ---
-            if num_cells >= 11:  # Standard rows (11+)
-                idx_days, idx_start, idx_end, idx_loc = 8, 9, 10, 11
-                logging.debug(
-                    f"Using standard indices for {num_cells} cells: D=8, S=9, E=10, L=11"
-                )
-            elif num_cells == 10:  # Often Marker(4)+D(5)+S(6)+E(7)+L(8)+EmptyExam?(9)
-                idx_days, idx_start, idx_end, idx_loc = 5, 6, 7, 8
-                logging.debug("Using 10-cell indices: D=5, S=6, E=7, L=8")
-            elif num_cells == 9:  # The problematic case: Marker(4)+D(5)+S(6)+E(7)+L(8)
-                idx_days, idx_start, idx_end, idx_loc = (
-                    5,
-                    6,
-                    7,
-                    8,
-                )  # DEFINITELY USE 7 AND 8
-                logging.debug("Using 9-cell indices: D=5, S=6, E=7, L=8")
-            # Added explicit handling for 8 based on review - might need adjustment
-            elif num_cells == 8:  # Maybe Marker(4)+D(5)+S(6)+L(7)? End time missing?
-                idx_days, idx_start, idx_end, idx_loc = (
-                    5,
-                    6,
-                    6,
-                    7,
-                )  # Guess: Use start time for end, Loc=7
-                logging.debug("Using tentative 8-cell indices: D=5, S=6, E=6, L=7")
-            else:
-                logging.warning(
-                    f"Addl time row marker found, but cell count ({num_cells}) unhandled."
-                )
-                return None
-            # --- END INDEX LOGIC ---
+    prev_section = course_sections_map[curr_course][-1]
+    if "meeting_times" not in prev_section or prev_section["meeting_times"] is None:
+        prev_section["meeting_times"] = []
 
-            # Check validity (copied from previous version, seems reasonable)
-            if idx_days >= num_cells:
-                logging.warning(f"Index D={idx_days} OOB for {num_cells} cells")
-                return None
-            if idx_start >= num_cells:
-                logging.warning(f"Index S={idx_start} OOB for {num_cells} cells")
-                return None
-            if idx_end >= num_cells and idx_end != idx_start:
-                logging.warning(f"Index E={idx_end} OOB for {num_cells} cells")
-                return None
-            if idx_loc >= num_cells:
-                logging.warning(f"Index L={idx_loc} OOB for {num_cells} cells")
-                return None
+    prev_section_meetings = prev_section["meeting_times"]
 
-            # Call the parsing function
-            meeting_times = self._parse_meeting_time_cells(
-                cells, idx_days, idx_start, idx_end, idx_loc
+    if is_online and len(cols) == 9:
+        days = safe_extract_text(cols[5])
+        time_str = safe_extract_text(cols[6])
+        meeting_times = determine_meeting_times(days, time_str)
+    elif not is_online and len(cols) == 10:
+        days = safe_extract_text(cols[5])
+        begin_time = safe_extract_text(cols[6])
+        end_time = safe_extract_text(cols[7])
+        meeting_times = determine_meeting_times(days, begin_time, end_time)
+        if meeting_times and meeting_times != ["ARR"] and len(meeting_times) > 0:
+            meeting_times = [meeting_times[-1]]
+
+    else:
+        logging.warning(
+            f"Invalid additional times row: columns={len(cols)}, is_online={is_online}"
+        )
+        return
+
+    if meeting_times:
+        prev_section_meetings.extend(meeting_times)
+
+
+def process_subject_rows(rows: list[Tag]) -> CourseMap:
+    """Process all table rows for a subject and extract course section data.
+
+    Iterates through HTML table rows and identifies different row types
+    (regular sections, arranged sections, additional times). Builds a
+    comprehensive map of courses to their sections with all meeting times.
+
+    Args:
+        rows (list[Tag]): List of HTML table row elements to process
+
+    Returns:
+        CourseMap: Dictionary mapping course codes to lists of section objects
+    """
+    course_sections_map = defaultdict(list)
+    curr_course = None
+
+    for i, row in enumerate(rows):
+        if not isinstance(row, Tag) or row is None:
+            logging.warning(f"Row {i}: Invalid row type, skipping")
+            continue
+
+        cols = row.find_all("td")
+        if not cols:
+            logging.warning(f"Row {i}: No columns found, skipping")
+            continue
+        if not isinstance(cols, list):
+            logging.warning(f"Row {i}: Not a list, skipping")
+            continue
+
+        col_count = len(cols)
+        logging.info(f"Row {i}: Processing row with {col_count} columns")
+
+        if col_count == 9 and is_additional_times_row(cols, 9):
+            logging.info("Scraping Additional Time row (Online)")
+
+            parse_additional_times_row(
+                cols, course_sections_map, curr_course, is_online=True
             )
+            # we don't want to create a new section here
+            continue
 
+        elif col_count == 10 and is_additional_times_row(cols, 10):
+            logging.info("Scraping Additional Time row (In Person)")
+            parse_additional_times_row(
+                cols, course_sections_map, curr_course, is_online=False
+            )
+            # we don't want to create a new section here
+            continue
+
+        parsed_data = None
+        meeting_times = None
+
+        # This is things like online async classes, research, independent study, internship, etc
+        # All should be 'ARR' for times
+        if col_count == 12:
+            parsed_data = parse_new_section_data(cols, "arranged")
+            if parsed_data:
+                meeting_times = determine_meeting_times(
+                    parsed_data.get("days"),
+                    parsed_data.get("time"),
+                )
+
+        # Regular in person classes or sync online classes
+        elif col_count == 13:
+            parsed_data = parse_new_section_data(cols, "regular")
+            if parsed_data:
+                meeting_times = determine_meeting_times(
+                    parsed_data.get("days"),
+                    parsed_data.get("begin_time"),
+                    parsed_data.get("end_time"),
+                )
+
+        # unrecognized row type
+        else:
             logging.debug(
-                f"Parsed {len(meeting_times)} meeting times from additional time row."
+                f"Row {i}: Unrecognized row type with {col_count} columns, skipping"
             )
-            return meeting_times
+            continue
 
-        except Exception as e:
-            logging.warning(
-                f"Error processing additional meeting row: {type(e).__name__}: {e} - Row Preview: {[c.get_text(strip=True)[:20] for c in cells]}"
-            )
-            return None
+        if not parsed_data:
+            logging.warning(f"Row {i}: Failed to parse section data, skipping")
+            continue
 
-    def _parse_meeting_time_cells(
-        self,
-        cells: List[Tag],
-        idx_days: int,
-        idx_start: int,
-        idx_end: int,
-        idx_loc: int,
-    ) -> List[Dict[str, str]]:
-        """
-        Parses day, time, and location from the relevant cells of a row using provided indices.
-        Includes checks for sufficient cell count.
-        Returns a list of meeting time dictionaries. Handles multi-day entries (e.g., MWF).
-        """
-        # (Implementation remains the same)
-        meeting_times = []
-        num_cells = len(cells)
-        if not all(idx < num_cells for idx in [idx_days, idx_start, idx_end, idx_loc]):
+        course = parsed_data.get("course")
+        if not course:
+            logging.warning(f"Row {i}: No course found in parsed data, skipping")
+            continue
+
+        curr_course = course
+        section = create_section_object(parsed_data, meeting_times)
+        if section:
+            course_sections_map[curr_course].append(section)
+        else:
+            logging.warning(f"Row {i}: Failed to create section object")
+
+    return course_sections_map
+
+
+# ===========================================================================
+# High Level Scraping (depend on row processing functions)
+# ===========================================================================
+
+
+def fetch_subjects(term: str, fetcher: TimetableFetcher) -> list[str]:
+    """Fetch all available subject codes for a given academic term.
+
+    Retrieves the timetable page and extracts subject codes from JavaScript
+    that populates the subject dropdown menu. Uses regex to find all subject
+    codes associated with the specified term.
+
+    Args:
+        term (str): Academic term code (e.g., "202509" for Fall 2025)
+        fetcher (TimetableFetcher): TimetableFetcher instance for making HTTP requests
+
+    Returns:
+        list[str]: List of unique subject codes available for the term,
+                   empty list if fetch or parsing fails
+    """
+    try:
+        html = fetcher.fetch_html("%")
+        if html is None:
+            logging.warning("No HTML returned when retrieving all subjects")
+            return []
+    except Exception as e:
+        logging.error(f"Failed to fetch HTML when retrieving all subjects: {e}")
+        return []
+
+    try:
+        script_match = re.search(
+            rf'case\s+["\']?{re.escape(term)}["\']?\s*:(.*?)break;', html, re.DOTALL
+        )
+        if not script_match:
             logging.warning(
-                f"Insufficient cells ({num_cells}) to parse meeting time using indices D={idx_days}, S={idx_start}, E={idx_end}, L={idx_loc}."
+                "Could not find matching script when retrieving all subjects"
             )
             return []
-        try:
-            days_text = cells[idx_days].get_text(strip=True)
-            time_text = cells[idx_start].get_text(strip=True)
-            end_time_text_check = cells[idx_end].get_text(strip=True)
-            location_text = cells[idx_loc].get_text(strip=True)
 
-            if (
-                "(ARR)" in days_text
-                or "TBA" in days_text.upper()
-                or "TBA" in time_text.upper()
-                or not time_text
-                or "-----" in time_text
-                or "TBA" in end_time_text_check.upper()
-                or not end_time_text_check
-                or "-----" in end_time_text_check
-            ):
-                logging.debug(
-                    f"Skipping meeting time due to TBA/ARR: Days='{days_text}', Start='{time_text}', End='{end_time_text_check}'"
-                )
-                return []
-            start_time_str_raw = time_text
-            end_time_str_raw = end_time_text_check
-            start_time_str = self._convert_to_24hr(start_time_str_raw)
-            end_time_str = self._convert_to_24hr(end_time_str_raw)
-
-            if start_time_str is None or end_time_str is None:
-                logging.warning(
-                    f"Could not parse or convert time: Start='{start_time_str_raw}', End='{end_time_str_raw}'"
-                )
-                return []
-            day_map = {
-                "M": "MONDAY",
-                "T": "TUESDAY",
-                "W": "WEDNESDAY",
-                "R": "THURSDAY",
-                "F": "FRIDAY",
-                "S": "SATURDAY",
-                "U": "SUNDAY",
-            }
-            parsed_days = []
-            processed_days_text = "".join(days_text.split())
-            for char in processed_days_text:
-                day_enum = day_map.get(char.upper())
-                if day_enum:
-                    parsed_days.append(day_enum)
-                elif char.strip():
-                    logging.warning(
-                        f"Unrecognized day character '{char}' in days string '{days_text}'"
-                    )
-
-            for day in parsed_days:
-                meeting_times.append(
-                    {
-                        "day": day,
-                        "startTime": start_time_str,
-                        "endTime": end_time_str,
-                        "location": location_text if location_text else "TBA",
-                    }
-                )
-        except Exception as e:
-            if isinstance(
-                e, AttributeError
-            ) and "'module' object has no attribute 'strptime'" in str(e):
-                logging.error(
-                    f"DATETIME IMPORT ERROR: {e}. Make sure 'import datetime' is used, not 'from datetime import datetime'."
-                )
-            else:
-                logging.warning(f"Error parsing meeting time cells content: {e}")
-        return meeting_times
-
-    def _convert_to_24hr(self, time_str: str) -> Optional[str]:
-        """Converts a time string (e.g., "9:30AM", "5:00PM") to HH:MM format."""
-        # (Implementation remains the same)
-        if (
-            not time_str
-            or "TBA" in time_str.upper()
-            or "ARR" in time_str.upper()
-            or "-----" in time_str
-        ):
-            return None
-        try:
-            time_str_cleaned = time_str.upper().replace(" ", "")
-            # Use datetime.datetime.strptime
-            time_obj = datetime.strptime(time_str_cleaned, "%I:%M%p")
-            return time_obj.strftime("%H:%M")
-        except ValueError:
-            try:
-                # Use datetime.datetime.strptime
-                time_obj = datetime.strptime(time_str_cleaned, "%H:%M")
-                return time_obj.strftime("%H:%M")
-            except ValueError:
-                logging.warning(f"Could not parse time string: '{time_str}'")
-                return None
-
-    def _map_section_type(self, type_text: str, mode_str: str) -> str:
-        """Maps the type text/char and mode string to the SectionType enum string."""
-        # (Implementation remains the same as v17)
-        type_text = type_text.upper().strip()
-        mode_str = mode_str.upper().strip()
-
-        if "ONLINE COURSE" in type_text:
-            if "SYNCHRONOUS" in mode_str:
-                return "ONLINE_SYNCHRONOUS"
-            elif "ASYNCHRONOUS" in mode_str:
-                return "ONLINE_ASYNCHRONOUS"
-            else:
-                logging.debug(
-                    f"Online course marker found but mode unclear: '{mode_str}'. Defaulting to ASYNCHRONOUS."
-                )
-                return "ONLINE_ASYNCHRONOUS"
-        # Handle standard types (potentially with trailing numbers like L01, B02)
-        base_type = re.match(r"^([A-Z]+)", type_text)
-        type_code = base_type.group(1) if base_type else type_text
-
-        if type_code == "L":
-            return "LECTURE"
-        if type_code == "B":
-            return "LAB"
-        if type_code == "R":
-            return "RESEARCH"
-        if type_code == "I":
-            return "INDEPENDENT_STUDY"
-        # Add other common codes if needed
-        # if type_code == 'C': return "RECITATION" # Example
-
-        if "HYBRID" in mode_str:
-            logging.debug(
-                f"Hybrid modality found: Type='{type_text}', Mode='{mode_str}'. Mapping to OTHER."
-            )
-            return "OTHER"
-        logging.debug(
-            f"Unmapped section type/mode: Type='{type_text}', Mode='{mode_str}'. Defaulting to OTHER."
+        # Extract all subject codes from new Option() calls
+        subjects = re.findall(
+            r'new Option\(".*?",\s*"([A-Z0-9]+)"', script_match.group(1)
         )
-        return "OTHER"
+        unique_subjects = list(dict.fromkeys(subjects))  # remove duplicates
+
+        logging.info(f"Found {len(unique_subjects)} subjects for term {term}")
+        return unique_subjects
+    except Exception as e:
+        logging.error(f"Failed to parse subjects from HTML for term {term}: {e}")
+        return []
+
+
+def scrape_subjects(subjects: list[str], fetcher: Any) -> str:
+    """Scrape comprehensive course data for specified subjects.
+
+    Iterates through subject codes and extracts detailed course information
+    including sections, meeting times, instructors, location, etc.
+    Returns structured data ready for JSON serialization.
+
+    Args:
+        subjects (list[str]): List of subjects
+        fetcher (TimetableFetcher): TimetableFetcher object
+
+    Returns:
+        str: JSON string of all sections for all courses in subjects list
+    """
+    if not subjects or not fetcher:
+        return "{}"
+
+    all_subjects_map: SubjectMap = {}
+
+    for subject in subjects:
+        logging.info(f"Starting scrape for subject: {subject}")
+
+        try:
+            html = fetcher.fetch_html(subject)
+            if html is None:
+                logging.warning(f"No HTML returned for subject: {subject}")
+                continue
+        except Exception as e:
+            logging.error(f"Failed ot fetch HTML for subject {subject}: {e}")
+            continue
+
+        try:
+            soup = BeautifulSoup(html, "html.parser")
+            section_table = soup.find("table", class_="dataentrytable")
+        except Exception as e:
+            logging.error(f"Failed to parse HTML for subject {subject}: {e}")
+            continue
+
+        if not isinstance(section_table, Tag):
+            logging.debug(f"Section table is not of type Tag for subject: {subject}")
+            continue
+        if section_table is None:
+            logging.debug(f"Section table is null for subject: {subject}")
+            continue
+
+        rows = section_table.find_all("tr")[1:]  # skip headers
+        if not rows or len(rows) <= 1:
+            logging.warning(f"No data rows were found for subject: {subject}")
+            continue
+
+        course_sections_map = process_subject_rows(rows)
+        all_subjects_map[subject] = course_sections_map
+        logging.info(
+            f"Processed {len(course_sections_map)} courses for subject: {subject}"
+        )
+
+    try:
+        return json.dumps(all_subjects_map, indent=2)
+    except Exception as e:
+        logging.error(f"Failed to serialize results to JSON: {e}")
+        return "{}"
+
+
+# ===========================================================================
+# Main Orchestration (depends on everything)
+# ===========================================================================
+
+
+def main(term: str, output_file: str) -> bool:
+    """Main function to orchestrate the course scraping process.
+
+    Args:
+        term: The academic term to scrape for (e.g. "202509" for Fall 2025)
+        output_file: The output JSON file name
+
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        logging.info(f"Starting course scraper for term: {term}")
+
+        fetcher = TimetableFetcher(term)
+
+        logging.info("Fetching subjects...")
+        subjects = fetch_subjects(term, fetcher)
+
+        if not subjects:
+            logging.error(f"No subjects found for term: {term}")
+            return False
+
+        logging.info(f"Found {len(subjects)} subjects to process")
+
+        logging.info("Starting scraping process...")
+        json_output = scrape_subjects(subjects, fetcher)
+
+        if json_output == "{}":
+            logging.error("Scraping returned empty results")
+            return False
+
+        with open(output_file, "w") as f:
+            f.write(json_output)
+
+        logging.info(f"Successfully wrote results to {output_file}")
+        return True
+
+    except Exception as e:
+        logging.error(f"Main function failed: {e}")
+        return False
+
+
+# ===================================================================
+# Main Entry Point
+# ===================================================================
+
+
+if __name__ == "__main__":
+    success = main("202509", "sections.json")
+    if success:
+        print("Course scraping completed successfully")
+    else:
+        print("Course scraping failed. Check parse.log for details")
