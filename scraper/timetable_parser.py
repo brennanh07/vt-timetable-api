@@ -467,7 +467,7 @@ def fetch_subjects(term: str, fetcher: TimetableFetcher) -> list[str]:
         return []
 
 
-def scrape_subjects(subjects: list[str], fetcher: Any) -> str:
+def scrape_subjects(subjects: list[str], fetcher: TimetableFetcher) -> str:
     """Scrape comprehensive course data for specified subjects.
 
     Iterates through subject codes and extracts detailed course information
