@@ -149,3 +149,44 @@ class TestSafeExtractText:
 
         # Assert
         assert extracted_text is None
+
+
+class TestIsAdditionalTimesRow:
+    """Tests helper function that checks if input row is an additional times row"""
+
+    def test_is_additional_times_row_empty_list(self):
+        """Test with empty list"""
+        assert is_additional_times_row([], 13) is False
+
+    def test_is_additional_times_row_wrong_length(self):
+        """Test with wrong expected length"""
+        cols = [Mock() for _ in range(10)]
+        assert is_additional_times_row(cols, 13) is False  # type: ignore
+
+    def test_is_additional_times_row_none_col_four(self):
+        """Tests when column 4 is None"""
+        cols = [Mock() for _ in range(13)]
+        cols[4] = None  # type: ignore
+        assert is_additional_times_row(cols, 13) is False  # type: ignore
+
+    def test_is_additional_times_row_no_b_element(self):
+        """Tests when column 4 has no <b> element"""
+        cols = [Mock() for _ in range(13)]
+        cols[4].find.return_value = None
+        assert is_additional_times_row(cols, 13) is False  # type: ignore
+
+    def test_is_additional_times_row_wrong_text(self):
+        """Tests when <b> element has wrong text"""
+        cols = [Mock() for _ in range(13)]
+        b_mock = Mock()
+        b_mock.get_text.return_value = "Some Other Text"
+        cols[4].find.return_value = b_mock
+        assert is_additional_times_row(cols, 13) is False  # type: ignore
+
+    def test_is_additional_times_row_correct_marker(self):
+        """Test when row has correct additional times marker"""
+        cols = [Mock() for _ in range(13)]
+        b_mock = Mock()
+        b_mock.get_text.return_value = "* Additional Times *"
+        cols[4].find.return_value = b_mock
+        assert is_additional_times_row(cols, 13) is True  # type: ignore
