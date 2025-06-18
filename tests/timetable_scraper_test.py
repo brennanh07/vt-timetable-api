@@ -116,8 +116,36 @@ class TestSafeExtractText:
 
     def test_safe_extract_no_selector(self):
         # Arrange
-        
+        html = '<td class="deleft" style="background-color:WHITE">Softw Des &amp; Data Structures</td>'
+        soup = BeautifulSoup(html, "html.parser")
+        td_tag = soup.find("td")
 
         # Act
+        extracted_text = safe_extract_text(td_tag)  # type: ignore
 
         # Assert
+        assert extracted_text == "Softw Des & Data Structures"
+
+    def test_safe_extract_with_selector(self):
+        # Arrange
+        html = '<td class="deleft" style="background-color:WHITE"><font size="1">CS-2114</font></td>'
+        soup = BeautifulSoup(html, "html.parser")
+        td_tag = soup.find("td")
+
+        # Act
+        extracted_text = safe_extract_text(td_tag, selector="font")  # type: ignore
+
+        # Assert
+        assert extracted_text == "CS-2114"
+
+    def test_safe_extract_selector_not_found(self):
+        # Arrange
+        html = '<td class="deleft" style="background-color:WHITE"><font size="1">CS-2114</font></td>'
+        soup = BeautifulSoup(html, "html.parser")
+        td_tag = soup.find("td")
+
+        # Act
+        extracted_text = safe_extract_text(td_tag, selector="b")  # type: ignore
+
+        # Assert
+        assert extracted_text is None
