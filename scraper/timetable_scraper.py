@@ -85,7 +85,7 @@ def safe_extract_text(element: Tag, selector: Optional[str] = None) -> Optional[
 
     if selector:
         found = element.find(selector)
-        if not found:
+        if not found or not isinstance(found, Tag):
             return None
         element = found
 
@@ -107,7 +107,7 @@ def is_additional_times_row(cols: list[Tag], expected_length: int) -> bool:
     Returns:
         bool: True if row contains additional times marker, False otherwise
     """
-    if not cols or len(cols) != expected_length:
+    if len(cols) != expected_length:
         return False
 
     col_four = cols[4]
