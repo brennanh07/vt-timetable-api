@@ -1,6 +1,6 @@
 from bs4 import BeautifulSoup, Tag
 import json
-from timetable_fetcher import TimetableFetcher
+from .timetable_fetcher import TimetableFetcher
 import re
 from collections import defaultdict
 from typing import Any, Optional
@@ -77,7 +77,7 @@ def safe_extract_text(element: Tag, selector: Optional[str] = None) -> Optional[
         selector (Optional[str]): Optional CSS selector to find child elements first
 
     Returns:
-        Optional[str]: Extracted text content, or None if extractino fails or
+        Optional[str]: Extracted text content, or None if extraction fails or
                        text is empty/invalid
     """
     if not element or not isinstance(element, Tag):
@@ -510,7 +510,6 @@ class TimetableScraper:
         if not subjects:
             logging.error(f"No subjects found for term: {self.term}")
             return {}
-
         logging.info(f"Found {len(subjects)} subjects to process")
         return self.scrape_multiple_subjects(subjects)
 
