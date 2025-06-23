@@ -455,3 +455,230 @@ class TestParseNewSectionData:
         # Assert
         assert result["title"] == "Calculus I & II"  # type: ignore
         assert result["instructor"] == "Dr. Smith & Dr. Jones"  # type: ignore
+
+
+class TestDetermineMeetingTimes:
+    def test_determine_meeting_times_null_days(self):
+        """Tests determine meeting times with null days input"""
+        # Arrange
+        days = None
+        begin_time = "10:00AM"
+        end_time = "10:50AM"
+
+        # Act
+        meeting_times: list = determine_meeting_times(days, begin_time, end_time)
+
+        # Assert
+        assert meeting_times == ["ARR"]
+
+    def test_determine_meeting_times_arranged_days(self):
+        """Tests determine meeting times with ARR days input"""
+        # Arrange
+        days = "(ARR)"
+        begin_time = "10:00AM"
+        end_time = "10:50AM"
+
+        # Act
+        meeting_times: list = determine_meeting_times(days, begin_time, end_time)
+
+        # Assert
+        assert meeting_times == ["ARR"]
+
+    def test_determine_meeting_times_no_end_time(self):
+        """Tests determine meeting times with a section with no end time
+        (represents online/research/etc type of section)"""
+        # Arrange
+        days = "M"
+        begin_time = "10:00AM"
+        end_time = None
+
+        # Act
+        meeting_times: list = determine_meeting_times(days, begin_time, end_time)
+
+        # Assert
+        assert meeting_times == [
+            {
+                "day": 1,
+                "begin_time": "10:00",
+                "end_time": "10:00",
+            },
+        ]
+
+    def test_determine_meeting_times_one_day(self):
+        """Tests determine meeting times with a in-person section with one day"""
+        # Arrange
+        days = "M"
+        begin_time = "10:00AM"
+        end_time = "10:50AM"
+
+        # Act
+        meeting_times: list = determine_meeting_times(days, begin_time, end_time)
+
+        # Assert
+        assert meeting_times == [
+            {
+                "day": 1,
+                "begin_time": "10:00",
+                "end_time": "10:50",
+            },
+        ]
+
+    def test_determine_meeting_times_two_days(self):
+        """Tests determine meeting times with a in-person section with one day"""
+        # Arrange
+        days = "M W"
+        begin_time = "10:00AM"
+        end_time = "10:50AM"
+
+        # Act
+        meeting_times: list = determine_meeting_times(days, begin_time, end_time)
+
+        # Assert
+        assert meeting_times == [
+            {
+                "day": 1,
+                "begin_time": "10:00",
+                "end_time": "10:50",
+            },
+            {
+                "day": 3,
+                "begin_time": "10:00",
+                "end_time": "10:50",
+            },
+        ]
+
+    def test_determine_meeting_times_three_days(self):
+        """Tests determine meeting times with a in-person section with one day"""
+        # Arrange
+        days = "M W F"
+        begin_time = "10:00AM"
+        end_time = "10:50AM"
+
+        # Act
+        meeting_times: list = determine_meeting_times(days, begin_time, end_time)
+
+        # Assert
+        assert meeting_times == [
+            {
+                "day": 1,
+                "begin_time": "10:00",
+                "end_time": "10:50",
+            },
+            {
+                "day": 3,
+                "begin_time": "10:00",
+                "end_time": "10:50",
+            },
+            {
+                "day": 5,
+                "begin_time": "10:00",
+                "end_time": "10:50",
+            },
+        ]
+
+
+class TestCreateSectionObject:
+    def test_create_section_object_inperson(self):
+        # Arrange
+        parsed_data = {
+            "crn": "87084",
+            "course": "CS-2114",
+            "title": "Software Design",
+            "schedule_type": "L",
+            "modality": "Face-to-Face Instruction",
+            "credit_hours": "3",
+            "capacity": "35",
+            "instructor": None,
+            "days": "T R",
+            "begin_time": "9:30AM",
+            "end_time": "10:20AM",
+            "location": "GOODW 190",
+            "exam_code": "CTE",
+        }
+        meeting_times = [
+            {
+                "day": 1,
+                "begin_time": "10:00",
+                "end_time": "10:50",
+            },
+            {
+                "day": 3,
+                "begin_time": "10:00",
+                "end_time": "10:50",
+            },
+            {
+                "day": 5,
+                "begin_time": "10:00",
+                "end_time": "10:50",
+            },
+        ]
+
+        # Act
+        section_obj = create_section_object(parsed_data, meeting_times)
+
+        # Assert
+        assert section_obj == {
+            "crn": "87084",
+            "course": "CS-2114",
+            "title": "Software Design",
+            "schedule_type": "L",
+            "modality": "Face-to-Face Instruction",
+            "credit_hours": "3",
+            "capacity": "35",
+            "instructor": None,
+            "meeting_times": [
+                {
+                    "day": 1,
+                    "begin_time": "10:00",
+                    "end_time": "10:50",
+                },
+                {
+                    "day": 3,
+                    "begin_time": "10:00",
+                    "end_time": "10:50",
+                },
+                {
+                    "day": 5,
+                    "begin_time": "10:00",
+                    "end_time": "10:50",
+                },
+            ],
+            "location": "GOODW 190",
+            "exam_code": "CTE",
+        }
+
+    def test_create_section_object_arranged(self):
+        # Arrange
+        parsed_data = {
+            "crn": "87084",
+            "course": "CS-2114",
+            "title": "Software Design",
+            "schedule_type": "L",
+            "modality": "Face-to-Face Instruction",
+            "credit_hours": "3",
+            "capacity": "35",
+            "instructor": None,
+            "days": "T R",
+            "begin_time": "(ARR)",
+            "location": "GOODW 190",
+            "exam_code": "CTE",
+        }
+        meeting_times = ["ARR"]
+
+        # Act
+        section_obj = create_section_object(parsed_data, meeting_times)  # type: ignore
+
+        # Assert
+        assert section_obj == {
+            "crn": "87084",
+            "course": "CS-2114",
+            "title": "Software Design",
+            "schedule_type": "L",
+            "modality": "Face-to-Face Instruction",
+            "credit_hours": "3",
+            "capacity": "35",
+            "instructor": None,
+            "meeting_times": ["ARR"],
+            "location": "GOODW 190",
+            "exam_code": "CTE",
+        }
