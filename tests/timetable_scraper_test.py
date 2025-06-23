@@ -190,3 +190,268 @@ class TestIsAdditionalTimesRow:
         b_mock.get_text.return_value = "* Additional Times *"
         cols[4].find.return_value = b_mock
         assert is_additional_times_row(cols, 13) is True  # type: ignore
+
+
+class TestParseNewSectionData:
+    """Tests for parse_new_section_data function"""
+
+    def test_parse_arranged_section_data(self):
+        """Test parsing arranged section data with 12 columns"""
+        # Arrange
+        html = """
+        <tr>
+            <td><b>12345</b></td>
+            <td><font>CS-1064</font></td>
+            <td>Intro to Programming</td>
+            <td>L</td>
+            <td><p>Online</p></td>
+            <td>3</td>
+            <td>100</td>
+            <td>John Doe</td>
+            <td>(ARR)</td>
+            <td>-----</td>
+            <td>Online</td>
+            <td><a>CTE</a></td>
+        </tr>
+        """
+        soup = BeautifulSoup(html, "html.parser")
+        cols = soup.find("tr").find_all("td")  # type: ignore
+
+        # Act
+        result = parse_new_section_data(cols, "arranged")  # type: ignore
+
+        # Assert
+        expected = {
+            "crn": "12345",
+            "course": "CS-1064",
+            "title": "Intro to Programming",
+            "schedule_type": "L",
+            "modality": "Online",
+            "credit_hours": "3",
+            "capacity": "100",
+            "instructor": "John Doe",
+            "days": "(ARR)",
+            "time": "-----",
+            "location": "Online",
+            "exam_code": "CTE",
+        }
+        assert result == expected
+
+    def test_parse_regular_section_data(self):
+        """Test parsing regular section data with 13 columns"""
+        # Arrange
+        html = """
+        <tr>
+            <td><b>83488</b></td>
+            <td><font>CS-2114</font></td>
+            <td>Softw Des & Data Structures</td>
+            <td>L</td>
+            <td><p>Face-to-Face Instruction</p></td>
+            <td>3</td>
+            <td>35</td>
+            <td>N/A</td>
+            <td>T R</td>
+            <td>9:30AM</td>
+            <td>10:20AM</td>
+            <td>GOODW 190</td>
+            <td><a>CTE</a></td>
+        </tr>
+        """
+        soup = BeautifulSoup(html, "html.parser")
+        cols = soup.find("tr").find_all("td")  # type: ignore
+
+        # Act
+        result = parse_new_section_data(cols, "regular")  # type: ignore
+
+        # Assert
+        expected = {
+            "crn": "83488",
+            "course": "CS-2114",
+            "title": "Softw Des & Data Structures",
+            "schedule_type": "L",
+            "modality": "Face-to-Face Instruction",
+            "credit_hours": "3",
+            "capacity": "35",
+            "instructor": None,
+            "days": "T R",
+            "begin_time": "9:30AM",
+            "end_time": "10:20AM",
+            "location": "GOODW 190",
+            "exam_code": "CTE",
+        }
+        assert result == expected
+
+    def test_parse_section_data_invalid_row_type(self):
+        """Test parsing with invalid row type returns empty dict"""
+        # Arrange
+        html = "<tr><td>test</td></tr>"
+        soup = BeautifulSoup(html, "html.parser")
+        cols = soup.find("tr").find_all("td")  # type:ignore
+
+        # Act
+        result = parse_new_section_data(cols, "invalid_type")  # type: ignore
+
+        # Assert
+        assert result == {}
+
+    def test_parse_section_data_with_none_values(self):
+        """Test parsing when some elements are missing or None"""
+        # Arrange
+        html = """
+        <tr>
+            <td></td>
+            <td><font></font></td>
+            <td></td>
+            <td></td>
+            <td><p></p></td>
+            <td></td>
+            <td></td>
+            <td></td>
+            <td></td>
+            <td></td>
+            <td></td>
+            <td></td>
+            <td><a></a></td>
+        </tr>
+        """
+        soup = BeautifulSoup(html, "html.parser")
+        cols = soup.find("tr").find_all("td")  # type: ignore
+
+        # Act
+        result = parse_new_section_data(cols, "regular")  # type: ignore
+
+        # Assert
+        assert result is not None
+        assert all(value is None or value == "" for value in result.values())
+
+    def test_parse_arranged_section_with_missing_selectors(self):
+        """Test arranged section parsing when specific selectors are missing"""
+        # Arrange
+        html = """
+        <tr>
+            <td>12345</td>
+            <td>CS-1064</td>
+            <td>Intro to Programming</td>
+            <td>L</td>
+            <td>Online</td>
+            <td>3</td>
+            <td>100</td>
+            <td>John Doe</td>
+            <td>(ARR)</td>
+            <td>-----</td>
+            <td>Online</td>
+            <td>CTE</td>
+        </tr>
+        """
+        soup = BeautifulSoup(html, "html.parser")
+        cols = soup.find("tr").find_all("td")  # type: ignore
+
+        # Act
+        result = parse_new_section_data(cols, "arranged")  # type: ignore
+
+        # Assert
+        expected = {
+            "crn": None,  # No <b> tag
+            "course": None,  # No <font> tag
+            "title": "Intro to Programming",
+            "schedule_type": "L",
+            "modality": None,  # No <p> tag
+            "credit_hours": "3",
+            "capacity": "100",
+            "instructor": "John Doe",
+            "days": "(ARR)",
+            "time": "-----",
+            "location": "Online",
+            "exam_code": None,  # No <a> tag
+        }
+        assert result == expected
+
+    def test_parse_regular_section_with_missing_selectors(self):
+        """Test regular section parsing when specific selectors are missing"""
+        # Arrange
+        html = """
+        <tr>
+            <td>83488</td>
+            <td>CS-2114</td>
+            <td>Softw Des & Data Structures</td>
+            <td>L</td>
+            <td>Face-to-Face Instruction</td>
+            <td>3</td>
+            <td>35</td>
+            <td>N/A</td>
+            <td>T R</td>
+            <td>9:30AM</td>
+            <td>10:20AM</td>
+            <td>GOODW 190</td>
+            <td>CTE</td>
+        </tr>
+        """
+        soup = BeautifulSoup(html, "html.parser")
+        cols = soup.find("tr").find_all("td")  # type: ignore
+
+        # Act
+        result = parse_new_section_data(cols, "regular")  # type: ignore
+
+        # Assert
+        expected = {
+            "crn": None,  # No <b> tag
+            "course": None,  # No <font> tag
+            "title": "Softw Des & Data Structures",
+            "schedule_type": "L",
+            "modality": None,  # No <p> tag
+            "credit_hours": "3",
+            "capacity": "35",
+            "instructor": None,
+            "days": "T R",
+            "begin_time": "9:30AM",
+            "end_time": "10:20AM",
+            "location": "GOODW 190",
+            "exam_code": None,  # No <a> tag
+        }
+        assert result == expected
+
+    @patch("scraper.timetable_scraper.logging")
+    def test_parse_section_data_logs_warning_for_invalid_type(self, mock_logging):
+        """Test that invalid row type triggers warning log"""
+        # Arrange
+        html = "<tr><td>test</td></tr>"
+        soup = BeautifulSoup(html, "html.parser")
+        cols = soup.find("tr").find_all("td")  # type: ignore
+
+        # Act
+        parse_new_section_data(cols, "invalid_type")  # type: ignore
+
+        # Assert
+        mock_logging.warning.assert_called_once_with(
+            "Row type not recognized: invalid_type"
+        )
+
+    def test_parse_section_data_with_special_characters(self):
+        """Test parsing section data with HTML entities and special characters"""
+        # Arrange
+        html = """
+        <tr>
+            <td><b>12345</b></td>
+            <td><font>MATH-1225</font></td>
+            <td>Calculus I &amp; II</td>
+            <td>L</td>
+            <td><p>Hybrid</p></td>
+            <td>4</td>
+            <td>25</td>
+            <td>Dr. Smith &amp; Dr. Jones</td>
+            <td>M W F</td>
+            <td>8:00AM</td>
+            <td>8:50AM</td>
+            <td>MATH 101</td>
+            <td><a>FTE</a></td>
+        </tr>
+        """
+        soup = BeautifulSoup(html, "html.parser")
+        cols = soup.find("tr").find_all("td")  # type: ignore
+
+        # Act
+        result = parse_new_section_data(cols, "regular")  # type: ignore
+
+        # Assert
+        assert result["title"] == "Calculus I & II"  # type: ignore
+        assert result["instructor"] == "Dr. Smith & Dr. Jones"  # type: ignore
