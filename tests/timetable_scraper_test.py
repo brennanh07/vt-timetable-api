@@ -3,6 +3,7 @@ from unittest.mock import Mock, patch, MagicMock
 from bs4 import BeautifulSoup, Tag
 import json
 from collections import defaultdict
+from typing import cast
 
 from scraper.timetable_scraper import (
     TimetableScraper,
@@ -682,3 +683,108 @@ class TestCreateSectionObject:
             "location": "GOODW 190",
             "exam_code": "CTE",
         }
+
+
+class TestParseAdditionalTimesRow:
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        html = """
+        <tr>
+        <td class="dedefault" style="border-right-width:0px;border-top-width:1px;">&nbsp;</td>
+        <td class="dedefault" style="border-right-width:0px;border-top-width:1px;">&nbsp;</td>
+        <td class="dedefault" style="border-right-width:0px;border-top-width:1px;">&nbsp;</td>
+        <td class="dedefault" style="border-right-width:0px;border-top-width:1px;">&nbsp;</td>
+        <td colspan="4" class="dedefault" style="background-color:WHITE;"><b class="blue_msg">* Additional Times *</b></td>
+        <td class="dedefault" style="font-size:10px;background-color:WHITE">F      </td>
+        <td class="deright" style="font-size:10px;background-color:WHITE">12:20PM</td>
+        <td class="deright" style="font-size:10px;background-color:WHITE">2:50PM</td>
+        <td class="deleft" style="font-size:10px;background-color:WHITE">CLMS 170</td>
+        <td class="dedefault" style="border-top-width:0px;background-color:WHITE">&nbsp;</td>
+        </tr>
+        """
+        soup = BeautifulSoup(html, "html.parser")
+        self.cols = cast(list[Tag], soup.find("tr").find_all("td"))  # type: ignore
+
+        self.course_sections_map = {
+            "CS-2114": [
+                {
+                    "crn": "83488",
+                    "course": "CS-2114",
+                    "title": "Softw Des & Data Structures",
+                    "schedule_type": "L",
+                    "modality": "Face-to-Face Instruction",
+                    "credit_hours": "3",
+                    "capacity": "35",
+                    "instructor": None,
+                    "meeting_times": [
+                        {"day": 2, "begin_time": "09:30", "end_time": "10:20"},
+                        {"day": 4, "begin_time": "09:30", "end_time": "10:20"},
+                        # {"day": 1, "begin_time": "14:30", "end_time": "17:00"},
+                    ],
+                    "location": "GOODW 190",
+                    "exam_code": "CTE",
+                },
+            ]
+        }
+
+        self.curr_course = "CS-2114"
+
+    @patch("scraper.timetable_scraper.logging")
+    def test_parse_additional_times_row_null_curr_course(self, mock_logging):
+        """Tests the parse additional times row func with no curr course"""
+        # Arrange
+        curr_course = None
+        is_online = False
+
+        # Act
+        parse_additional_times_row(
+            self.cols,
+            self.course_sections_map,
+            curr_course,  # type: ignore
+            is_online,
+        )
+
+        # Assert
+        mock_logging.warning.assert_called_once_with(
+            "No current course or not in sections map"
+        )
+
+    @patch("scraper.timetable_scraper.logging")
+    def test_parse_additional_times_row_curr_course_not_found(self, mock_logging):
+        """Tests the parse additional times row func with no curr course"""
+        # Arrange
+        curr_course = "MATH-1225"
+        is_online = False
+
+        # Act
+        parse_additional_times_row(
+            self.cols,
+            self.course_sections_map,
+            curr_course,  # type: ignore
+            is_online,
+        )
+
+        # Assert
+        mock_logging.warning.assert_called_once_with(
+            "No current course or not in sections map"
+        )
+
+    @patch("scraper.timetable_scraper.logging")
+    def test_parse_additional_times_row_null_course_sections_map(self, mock_logging):
+        """Tests the parse additional times row func with no curr course"""
+        # Arrange
+        self.course_sections_map["CS-2114"] = None  # type: ignore
+        is_online = False
+
+        # Act
+        parse_additional_times_row(
+            self.cols,
+            self.course_sections_map,  # type: ignore
+            self.curr_course,
+            is_online,
+        )
+
+        # Assert
+        mock_logging.warning.assert_called_once_with(
+            "No sections found to add additional time for course: CS-2114"
+        )
