@@ -3,6 +3,7 @@ import json
 from .timetable_fetcher import TimetableFetcher
 import re
 from collections import defaultdict
+from collections.abc import Sequence
 from typing import Any, Optional
 import logging
 
@@ -259,7 +260,7 @@ def create_section_object(
 
 
 def parse_additional_times_row(
-    cols: list[Tag],
+    cols: Sequence[Tag],
     course_sections_map: dict[str, list[dict[str, Any]]],
     curr_course: str,
     is_online: bool = False,
