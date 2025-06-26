@@ -788,3 +788,134 @@ class TestParseAdditionalTimesRow:
         mock_logging.warning.assert_called_once_with(
             "No sections found to add additional time for course: CS-2114"
         )
+
+    def test_parse_additional_times_row_no_meeting_times(self):
+        # Arrange
+        no_meeting_times = {
+            "CS-2114": [
+                {
+                    "crn": "83488",
+                    "course": "CS-2114",
+                    "title": "Softw Des & Data Structures",
+                    "schedule_type": "L",
+                    "modality": "Face-to-Face Instruction",
+                    "credit_hours": "3",
+                    "capacity": "35",
+                    "instructor": None,
+                    "location": "GOODW 190",
+                    "exam_code": "CTE",
+                },
+            ]
+        }
+
+        # Act
+        parse_additional_times_row(
+            self.cols, no_meeting_times, self.curr_course, is_online=False
+        )
+
+        # Assert
+        section = no_meeting_times["CS-2114"][0]
+        assert "meeting_times" in section
+        assert section["meeting_times"] is not None
+        assert isinstance(section["meeting_times"], list)
+
+    def test_parse_additional_times_row_null_meeting_times(self):
+        # Arrange
+        no_meeting_times = {
+            "CS-2114": [
+                {
+                    "crn": "83488",
+                    "course": "CS-2114",
+                    "title": "Softw Des & Data Structures",
+                    "schedule_type": "L",
+                    "modality": "Face-to-Face Instruction",
+                    "credit_hours": "3",
+                    "capacity": "35",
+                    "instructor": None,
+                    "meeting_times": None,
+                    "location": "GOODW 190",
+                    "exam_code": "CTE",
+                },
+            ]
+        }
+
+        # Act
+        parse_additional_times_row(
+            self.cols, no_meeting_times, self.curr_course, is_online=False
+        )
+
+        # Assert
+        section = no_meeting_times["CS-2114"][0]
+        assert "meeting_times" in section
+        assert section["meeting_times"] is not None
+        assert isinstance(section["meeting_times"], list)
+
+    def test_parse_additional_times_row_not_online(self):
+        # Arrange
+        is_online = False
+
+        # Act
+        parse_additional_times_row(
+            self.cols, self.course_sections_map, self.curr_course, is_online
+        )
+
+        # Assert
+        section = self.course_sections_map["CS-2114"][0]
+        meeting_times = section["meeting_times"]
+        assert meeting_times == [
+            {"day": 2, "begin_time": "09:30", "end_time": "10:20"},
+            {"day": 4, "begin_time": "09:30", "end_time": "10:20"},
+            {"day": 5, "begin_time": "12:20", "end_time": "14:50"},
+        ]
+
+    def test_parse_additional_times_row_online(self):
+        # Arrange
+        online_section_map = {
+            "ALCE-3624": [
+                {
+                    "crn": "80285",
+                    "course": "ALCE-3084",
+                    "title": "Comm Ag & Life Sci in Writing",
+                    "schedule_type": "L",
+                    "modality": "Hybrid (F2F & Online Instruc.)",
+                    "credit_hours": "3",
+                    "capacity": "30",
+                    "instructor": None,
+                    "meeting_times": [
+                        {"day": 2, "begin_time": "14:00", "end_time": "15:15"},
+                    ],
+                    "location": "GOODW 190",
+                    "exam_code": "CTE",
+                },
+            ]
+        }
+        html = """
+        <tr>
+        <td class="dedefault" style="border-right-width:0px;border-top-width:1px;">&nbsp;</td>
+        <td class="dedefault" style="border-right-width:0px;border-top-width:1px;">&nbsp;</td>
+        <td class="dedefault" style="border-right-width:0px;border-top-width:1px;">&nbsp;</td>
+        <td class="dedefault" style="border-right-width:0px;border-top-width:1px;">&nbsp;</td>
+        <td colspan="4" class="dedefault" style="background-color:WHITE;"><b class="blue_msg">* Additional Times *</b></td>
+        <td class="dedefault" style="font-size:10px;background-color:WHITE">(ARR)</td>
+        <td colspan="2" class="dedefault" style="font-size:10px;text-align:center;background-color:WHITE">----- (ARR) -----</td>
+        <td class="deleft" style="font-size:10px;background-color:WHITE">ONLINE</td>
+        <td class="dedefault" style="border-top-width:0px;background-color:WHITE">&nbsp;</td>
+        </tr>
+        """
+        soup = BeautifulSoup(html, "html.parser")
+        online_cols = cast(list[Tag], soup.find("tr").find_all("td"))  # type: ignore
+        is_online = True
+        curr_course = "ALCE-3624"
+
+        # Act
+        parse_additional_times_row(
+            online_cols, online_section_map, curr_course, is_online
+        )
+
+        # Assert
+        section = online_section_map[curr_course][0]
+        meeting_times = section["meeting_times"]
+        assert meeting_times == [
+            {"day": 2, "begin_time": "14:00", "end_time": "15:15"},
+            "ARR",
+        ]
