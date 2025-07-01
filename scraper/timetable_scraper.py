@@ -431,29 +431,25 @@ class TimetableScraper:
         except Exception as e:
             logging.error(f"Failed to fetch HTML when retrieving all subjects: {e}")
             return []
-        try:
-            script_match = re.search(
-                rf'case\s+["\']?{re.escape(self.term)}["\']?\s*:(.*?)break;',
-                html,
-                re.DOTALL,
-            )
-            if not script_match:
-                logging.warning(
-                    "Could not find matching script when retrieving all subjects"
-                )
-                return []
 
-            subjects = re.findall(
-                r'new Option\(".*?",\s*"([A-Z0-9]+)"', script_match.group(1)
-            )
-            unique_subjects = list(dict.fromkeys(subjects))
-            logging.info(f"Found {len(unique_subjects)} subjects for term {self.term}")
-            return unique_subjects
-        except Exception as e:
-            logging.error(
-                f"Failed to parse subjects from HTML for term {self.term}: {e}"
+        script_match = re.search(
+            rf'case\s+["\']?{re.escape(self.term)}["\']?\s*:(.*?)break;',
+            html,
+            re.DOTALL,
+        )
+        if not script_match:
+            logging.warning(
+                "Could not find matching script when retrieving all subjects"
             )
             return []
+
+        subjects = re.findall(
+            r'new Option\(".*?",\s*"([A-Z0-9]+)"', script_match.group(1)
+        )
+        unique_subjects = list(dict.fromkeys(subjects))
+        logging.info(f"Found {len(unique_subjects)} subjects for term {self.term}")
+
+        return unique_subjects
 
     def scrape_subject(self, subject: str) -> CourseMap:
         """Scrape data for a single subject."""
