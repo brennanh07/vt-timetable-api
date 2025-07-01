@@ -919,3 +919,250 @@ class TestParseAdditionalTimesRow:
             {"day": 2, "begin_time": "14:00", "end_time": "15:15"},
             "ARR",
         ]
+
+
+class TestProcessSubjectRows:
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        """Set up a variety of table rows to test the process_subject_rows function."""
+        # A standard in-person course section (13 cols)
+        self.regular_row_html = """
+        <tr>
+            <td><b>83488</b></td><td><font>CS-2114</font></td><td>Softw Des & Data Structures</td>
+            <td>L</td><td><p>Face-to-Face</p></td><td>3</td><td>35</td><td>N/A</td>
+            <td>T R</td><td>9:30AM</td><td>10:20AM</td><td>GOODW 190</td><td><a>CTE</a></td>
+        </tr>
+        """
+        # An online/arranged course section (12 cols)
+        self.arranged_row_html = """
+        <tr>
+            <td><b>12345</b></td><td><font>CS-1064</font></td><td>Intro to Programming</td>
+            <td>L</td><td><p>Online</p></td><td>3</td><td>100</td><td>John Doe</td>
+            <td>(ARR)</td><td>-----</td><td>Online</td><td><a>CTE</a></td>
+        </tr>
+        """
+        # An additional time row for an in-person course (10 cols)
+        self.additional_time_in_person_html = """
+        <tr>
+            <td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td>
+            <td colspan="4"><b>* Additional Times *</b></td>
+            <td>F</td><td>12:20PM</td><td>2:50PM</td><td>CLMS 170</td><td>&nbsp;</td>
+        </tr>
+        """
+        # An additional time row for an online course (9 cols)
+        self.additional_time_online_html = """
+        <tr>
+            <td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td>
+            <td colspan="4"><b>* Additional Times *</b></td>
+            <td>(ARR)</td><td colspan="2">----- (ARR) -----</td><td>ONLINE</td><td>&nbsp;</td>
+        </tr>
+        """
+        # An invalid row with not enough columns
+        self.invalid_row_html = "<tr><td>Invalid</td></tr>"
+
+    def test_process_single_regular_row(self):
+        """Test processing a single regular course row."""
+        soup = BeautifulSoup(self.regular_row_html, "html.parser")
+        rows = soup.find_all("tr")
+        result = process_subject_rows(rows)  # type: ignore
+        assert "CS-2114" in result
+        assert len(result["CS-2114"]) == 1
+        section = result["CS-2114"][0]
+        assert section["crn"] == "83488"
+        assert len(section["meeting_times"]) == 2
+
+    def test_process_single_arranged_row(self):
+        """Test processing a single arranged course row."""
+        soup = BeautifulSoup(self.arranged_row_html, "html.parser")
+        rows = soup.find_all("tr")
+        result = process_subject_rows(rows)  # type: ignore
+        assert "CS-1064" in result
+        assert len(result["CS-1064"]) == 1
+        section = result["CS-1064"][0]
+        assert section["crn"] == "12345"
+        assert section["meeting_times"] == ["ARR"]
+
+    def test_process_regular_row_with_additional_in_person_time(self):
+        """Test a regular course followed by an in-person additional time."""
+        html = self.regular_row_html + self.additional_time_in_person_html
+        soup = BeautifulSoup(html, "html.parser")
+        rows = soup.find_all("tr")
+        result = process_subject_rows(rows)  # type: ignore
+        assert "CS-2114" in result
+        section = result["CS-2114"][0]
+        assert len(section["meeting_times"]) == 3
+        assert {"day": 5, "begin_time": "12:20", "end_time": "14:50"} in section[
+            "meeting_times"
+        ]
+
+    def test_process_arranged_row_with_additional_online_time(self):
+        """Test an arranged course followed by an online additional time."""
+        html = self.arranged_row_html + self.additional_time_online_html
+        soup = BeautifulSoup(html, "html.parser")
+        rows = soup.find_all("tr")
+        result = process_subject_rows(rows)  # type: ignore
+        assert "CS-1064" in result
+        section = result["CS-1064"][0]
+        assert section["meeting_times"] == ["ARR", "ARR"]
+
+    def test_process_multiple_courses(self):
+        """Test processing multiple different courses in sequence."""
+        html = self.regular_row_html + self.arranged_row_html
+        soup = BeautifulSoup(html, "html.parser")
+        rows = soup.find_all("tr")
+        result = process_subject_rows(rows)  # type: ignore
+        assert "CS-2114" in result
+        assert "CS-1064" in result
+        assert len(result["CS-2114"]) == 1
+        assert len(result["CS-1064"]) == 1
+
+    def test_process_invalid_row(self):
+        """Test that an invalid row is skipped and does not affect output."""
+        html = self.regular_row_html + self.invalid_row_html + self.arranged_row_html
+        soup = BeautifulSoup(html, "html.parser")
+        rows = soup.find_all("tr")
+        result = process_subject_rows(rows)  # type: ignore
+        assert "CS-2114" in result
+        assert "CS-1064" in result
+        assert len(result) == 2
+
+    @patch("scraper.timetable_scraper.logging")
+    def test_process_row_with_no_course(self, mock_logging):
+        """Test a row that parses but has no course code."""
+        no_course_html = """
+        <tr>
+            <td><b>12345</b></td><td><font></font></td><td>No Course Name</td>
+            <td>L</td><td><p>Online</p></td><td>3</td><td>100</td><td>John Doe</td>
+            <td>(ARR)</td><td>-----</td><td>Online</td><td><a>CTE</a></td>
+        </tr>
+        """
+        soup = BeautifulSoup(no_course_html, "html.parser")
+        rows = soup.find_all("tr")
+        result = process_subject_rows(rows)  # type: ignore
+        assert not result
+        mock_logging.warning.assert_any_call(
+            "Row 0: No course found in parsed data, skipping"
+        )
+
+    def test_process_empty_rows_list(self):
+        """Test processing an empty list of rows."""
+        result = process_subject_rows([])
+        assert not result
+
+    def test_additional_time_without_previous_section(self):
+        """Test an additional time row appearing before any course section."""
+        html = self.additional_time_in_person_html + self.regular_row_html
+        soup = BeautifulSoup(html, "html.parser")
+        rows = soup.find_all("tr")
+        result = process_subject_rows(rows)  # type: ignore
+        # The additional time should be ignored, and the regular course processed normally.
+        assert "CS-2114" in result
+        assert len(result["CS-2114"][0]["meeting_times"]) == 2
+
+    @patch("scraper.timetable_scraper.logging")
+    def test_null_row(self, mock_logging):
+        """Test with a null row"""
+        # Arrange
+        soup = BeautifulSoup(self.regular_row_html, "html.parser")
+        rows = soup.find_all("tr")
+        rows.append(None)  # type: ignore
+
+        # Act
+        process_subject_rows(rows)  # type: ignore
+
+        # Assert
+        mock_logging.warning.assert_called_once_with(
+            "Row 1: Invalid row type, skipping"
+        )
+
+    @patch("scraper.timetable_scraper.logging")
+    def test_non_tag_row(self, mock_logging):
+        """Test a row with a non-Tag class"""
+        # Arrange
+        soup = BeautifulSoup(self.regular_row_html, "html.parser")
+        rows = soup.find_all("tr")
+        rows.append("NOT A TAG")  # type: ignore
+
+        # Act
+        process_subject_rows(rows)  # type: ignore
+
+        # Assert
+        mock_logging.warning.assert_called_once_with(
+            "Row 1: Invalid row type, skipping"
+        )
+
+    @patch("scraper.timetable_scraper.logging")
+    def test_no_cols(self, mock_logging):
+        """Tests a row with no cols in it"""
+        # Arrange
+        html = "<tr></tr>"
+        soup = BeautifulSoup(html, "html.parser")
+        rows = soup.find_all("tr")
+
+        # Act
+        result = process_subject_rows(rows)  # type: ignore
+
+        # Assert
+        assert not result
+        mock_logging.warning.assert_called_once_with(
+            "Row 0: No columns found, skipping"
+        )
+
+    @patch("scraper.timetable_scraper.logging")
+    @patch("scraper.timetable_scraper.parse_new_section_data")
+    def test_parse_data_failure(self, mock_parse_new_section_data, mock_logging):
+        """Test when parse_new_section_data returns None/falsy value."""
+        # Arrange - mock parse_new_section_data to return None
+        mock_parse_new_section_data.return_value = None
+
+        soup = BeautifulSoup(self.regular_row_html, "html.parser")
+        rows = soup.find_all("tr")
+
+        # Act
+        result = process_subject_rows(rows)  # type: ignore
+
+        # Assert
+        assert not result  # Should be empty since parsing failed
+        mock_logging.warning.assert_any_call(
+            "Row 0: Failed to parse section data, skipping"
+        )
+
+    @patch("scraper.timetable_scraper.logging")
+    @patch("scraper.timetable_scraper.create_section_object")
+    def test_create_section_object_failure(
+        self, mock_create_section_object, mock_logging
+    ):
+        """Test when create_section_object returns None/falsy value."""
+        # Arrange - mock create_section_object to return None
+        mock_create_section_object.return_value = None
+
+        soup = BeautifulSoup(self.regular_row_html, "html.parser")
+        rows = soup.find_all("tr")
+
+        # Act
+        result = process_subject_rows(rows)  # type: ignore
+
+        # Assert
+        assert not result  # Should be empty since section creation failed
+        mock_logging.warning.assert_any_call("Row 0: Failed to create section object")
+
+    @patch("scraper.timetable_scraper.logging")
+    @patch("scraper.timetable_scraper.parse_new_section_data")
+    def test_parse_data_returns_empty_dict(
+        self, mock_parse_new_section_data, mock_logging
+    ):
+        """Test when parse_new_section_data returns an empty dict (falsy)."""
+        # Arrange - mock parse_new_section_data to return empty dict
+        mock_parse_new_section_data.return_value = {}
+
+        soup = BeautifulSoup(self.regular_row_html, "html.parser")
+        rows = soup.find_all("tr")
+
+        # Act
+        result = process_subject_rows(rows)  # type: ignore
+
+        # Assert
+        assert not result
+        mock_logging.warning.assert_any_call(
+            "Row 0: Failed to parse section data, skipping"
+        )
