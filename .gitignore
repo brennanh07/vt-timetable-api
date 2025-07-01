@@ -14,3 +14,13 @@ wheels/
 *.html
 
 *.log
+
+*.coverage
+
+# Tool-specific caches and generated files
+/.pytest_cache/
+/output/
+/data/
+/.claude/
+/.ruff_cache/
+/courses.json
