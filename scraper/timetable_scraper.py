@@ -3,7 +3,6 @@ import json
 from .timetable_fetcher import TimetableFetcher
 import re
 from collections import defaultdict
-from collections.abc import Sequence
 from typing import Any, Optional
 import logging
 
@@ -260,7 +259,7 @@ def create_section_object(
 
 
 def parse_additional_times_row(
-    cols: Sequence[Tag],
+    cols: list[Tag],
     course_sections_map: dict[str, list[dict[str, Any]]],
     curr_course: str,
     is_online: bool = False,
@@ -342,9 +341,6 @@ def process_subject_rows(rows: list[Tag]) -> CourseMap:
         cols = row.find_all("td")
         if not cols:
             logging.warning(f"Row {i}: No columns found, skipping")
-            continue
-        if not isinstance(cols, list):
-            logging.warning(f"Row {i}: Not a list, skipping")
             continue
 
         col_count = len(cols)
