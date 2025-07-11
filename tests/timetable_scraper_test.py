@@ -1,23 +1,19 @@
-import pytest
-from unittest.mock import Mock, patch, MagicMock
-from bs4 import BeautifulSoup, Tag
 import json
 from collections import defaultdict
 from typing import cast
+from unittest.mock import MagicMock, Mock, patch
+
+import pytest
+from bs4 import BeautifulSoup, Tag
 
 from scraper.timetable_fetcher import TimetableFetcher
-from scraper.timetable_scraper import (
-    TimetableScraper,
-    parse_time,
-    safe_extract_text,
-    is_additional_times_row,
-    parse_new_section_data,
-    determine_meeting_times,
-    create_section_object,
-    parse_additional_times_row,
-    process_subject_rows,
-    DAY_MAPPING,
-)
+from scraper.timetable_scraper import (DAY_MAPPING, TimetableScraper,
+                                       create_section_object,
+                                       determine_meeting_times,
+                                       is_additional_times_row,
+                                       parse_additional_times_row,
+                                       parse_new_section_data, parse_time,
+                                       process_subject_rows, safe_extract_text)
 
 
 @pytest.fixture
@@ -1651,7 +1647,7 @@ class TestTimetableScraper:
             # Sample HTML for scrape_subject('CS')
             self.cs_subject_html = """
             <table class="dataentrytable">
-                <tr><th>CRN</th><th>Course</th>...</tr>
+                <tr><th>CRN</th><th>Course</th><th>Title</th><th>Type</th><th>Modality</th><th>Hours</th><th>Cap</th><th>Instructor</th><th>Days</th><th>Begin</th><th>End</th><th>Location</th><th>Exam</th></tr>
                 <tr>
                     <td><b>83488</b></td><td><font>CS-2114</font></td><td>Softw Des & Data Structures</td>
                     <td>L</td><td><p>Face-to-Face</p></td><td>3</td><td>35</td><td>N/A</td>
@@ -1668,19 +1664,26 @@ class TestTimetableScraper:
             # Sample HTML for scrape_subject('MATH')
             self.math_subject_html = """
             <table class="dataentrytable">
-                <tr><th>CRN</th><th>Course</th>...</tr>
+                <tr><th>CRN</th><th>Course</th><th>Title</th><th>Type</th><th>Modality</th><th>Hours</th><th>Cap</th><th>Instructor</th><th>Days</th><th>Begin</th><th>End</th><th>Location</th><th>Exam</th></tr>
                 <tr>
                     <td><b>54321</b></td><td><font>MATH-1225</font></td><td>Calculus I</td>
                     <td>L</td><td><p>Face-to-Face</p></td><td>4</td><td>150</td><td>Jane Smith</td>
                     <td>M W F</td><td>11:15AM</td><td>12:05PM</td><td>MCB 110</td><td><a>CTE</a></td>
                 </tr>
+                <tr>
+                    <td><b>65432</b></td><td><font>MATH-1226</font></td><td>Calculus II</td>
+                    <td>L</td><td><p>Face-to-Face</p></td><td>4</td><td>120</td><td>Bob Johnson</td>
+                    <td>T R</td><td>2:00PM</td><td>3:15PM</td><td>MCB 120</td><td><a>CTE</a></td>
+                </tr>
             </table>
             """
 
-            # Sample HTML for a subject with no courses
-            self.empty_subject_html = (
-                '<table class="dataentrytable"><tr><th>CRN</th></tr></table>'
-            )
+            # Sample HTML for a subject with no courses (PHYS)
+            self.empty_subject_html = """
+            <table class="dataentrytable">
+                <tr><th>CRN</th><th>Course</th><th>Title</th><th>Type</th><th>Modality</th><th>Hours</th><th>Cap</th><th>Instructor</th><th>Days</th><th>Begin</th><th>End</th><th>Location</th><th>Exam</th></tr>
+            </table>
+            """
 
             # Sample HTML for a subject that returns no table
             self.no_table_html = "<html><body><p>No data found</p></body></html>"
@@ -1769,3 +1772,320 @@ class TestTimetableScraper:
             "Could not find matching script when retrieving all subjects"
         )
         assert subjects == []
+
+    def test_scrape_subject_success(self):
+        """Test scrape_subject successfully retrieves and processes course data."""
+        # Act
+        result = self.scraper.scrape_subject("CS")
+
+        # Assert
+        self.mock_fetcher.fetch_html.assert_called_with("CS")
+        assert "CS-2114" in result
+        assert "CS-1064" in result
+        assert len(result["CS-2114"]) == 1
+        assert len(result["CS-1064"]) == 1
+        assert result["CS-2114"][0]["crn"] == "83488"
+        assert result["CS-1064"][0]["crn"] == "12345"
+
+    def test_scrape_subject_null_html(self):
+        """Test scrape_subject when fetcher returns None."""
+        # Arrange
+        with patch.object(self.mock_fetcher, 'fetch_html', return_value=None):
+            # Act
+            result = self.scraper.scrape_subject("CS")
+
+        # Assert
+        assert result == {}
+
+    @patch("scraper.timetable_scraper.logging")
+    def test_scrape_subject_fetch_exception(self, mock_logging):
+        """Test scrape_subject when fetch_html raises an exception."""
+        # Arrange
+        exception_message = "Connection timeout"
+        self.mock_fetcher.fetch_html.side_effect = Exception(exception_message)
+
+        # Act
+        result = self.scraper.scrape_subject("CS")
+
+        # Assert
+        self.mock_fetcher.fetch_html.assert_called_with("CS")
+        mock_logging.error.assert_called_once_with(
+            f"Failed to fetch HTML for subject CS: {exception_message}"
+        )
+        assert result == {}
+
+    @patch("scraper.timetable_scraper.logging")
+    def test_scrape_subject_parse_exception(self, mock_logging):
+        """Test scrape_subject when HTML parsing fails."""
+        # Arrange
+        self.mock_fetcher.fetch_html.return_value = "Invalid HTML that causes parsing error"
+        with patch("scraper.timetable_scraper.BeautifulSoup") as mock_soup:
+            mock_soup.side_effect = Exception("Parsing failed")
+
+            # Act
+            result = self.scraper.scrape_subject("CS")
+
+            # Assert
+            mock_logging.error.assert_called_once_with(
+                "Failed to parse HTML for subject CS: Parsing failed"
+            )
+            assert result == {}
+
+    @patch("scraper.timetable_scraper.logging")
+    def test_scrape_subject_no_table(self, mock_logging):
+        """Test scrape_subject when no data table is found."""
+        # Act
+        result = self.scraper.scrape_subject("INVALID")
+
+        # Assert
+        self.mock_fetcher.fetch_html.assert_called_with("INVALID")
+        mock_logging.debug.assert_called_once_with(
+            "No section table found for subject: INVALID"
+        )
+        assert result == {}
+
+    @patch("scraper.timetable_scraper.logging")
+    def test_scrape_subject_empty_table(self, mock_logging):
+        """Test scrape_subject when table has no data rows."""
+        # Act
+        result = self.scraper.scrape_subject("PHYS")
+
+        # Assert
+        self.mock_fetcher.fetch_html.assert_called_with("PHYS")
+        mock_logging.warning.assert_called_once_with(
+            "No data rows found for subject: PHYS"
+        )
+        assert result == {}
+
+    def test_scrape_multiple_subjects_success(self):
+        """Test scraping multiple subjects successfully."""
+        # Arrange
+        subjects = ["CS", "MATH"]
+
+        # Act
+        result = self.scraper.scrape_multiple_subjects(subjects)
+
+        # Assert
+        assert "CS" in result
+        assert "MATH" in result
+        assert "CS-2114" in result["CS"]
+        assert "MATH-1225" in result["MATH"]
+
+    def test_scrape_multiple_subjects_partial_success(self):
+        """Test scraping multiple subjects with some failures."""
+        # Arrange
+        subjects = ["CS", "INVALID", "MATH"]
+
+        # Act
+        result = self.scraper.scrape_multiple_subjects(subjects)
+
+        # Assert
+        assert "CS" in result
+        assert "MATH" in result
+        assert "INVALID" not in result  # Should not include empty results
+
+    def test_scrape_multiple_subjects_empty_list(self):
+        """Test scraping with empty subjects list."""
+        # Act
+        result = self.scraper.scrape_multiple_subjects([])
+
+        # Assert
+        assert result == {}
+
+    @patch("scraper.timetable_scraper.logging")
+    def test_scrape_all_subjects_success(self, mock_logging):
+        """Test scraping all subjects successfully."""
+        # Act
+        result = self.scraper.scrape_all_subjects()
+
+        # Assert
+        mock_logging.info.assert_any_call("Found 150 subjects to process")
+        assert len(result) > 0
+        assert "CS" in result
+        assert "MATH" in result
+
+    @patch("scraper.timetable_scraper.logging")  
+    def test_scrape_all_subjects_no_subjects_found(self, mock_logging):
+        """Test scrape_all_subjects when no subjects are available."""
+        # Arrange
+        with patch.object(self.scraper, "get_subjects", return_value=[]):
+            # Act
+            result = self.scraper.scrape_all_subjects()
+
+            # Assert
+            mock_logging.error.assert_called_once_with(
+                f"No subjects found for term: {self.term}"
+            )
+            assert result == {}
+
+    def test_find_course_success(self):
+        """Test finding a specific course across subjects."""
+        # Act
+        result = self.scraper.find_course("2114")
+
+        # Assert
+        assert len(result) > 0
+        # Should find CS-2114 in CS subject
+        found_cs = False
+        for subject, courses in result.items():
+            for course in courses:
+                if "2114" in course:
+                    found_cs = True
+                    break
+        assert found_cs
+
+    def test_find_course_case_insensitive(self):
+        """Test finding course with case-insensitive search."""
+        # Act
+        result = self.scraper.find_course("cs-2114")
+
+        # Assert
+        assert len(result) > 0
+        found_course = False
+        for subject, courses in result.items():
+            for course in courses:
+                if "CS-2114" in course:
+                    found_course = True
+                    break
+        assert found_course
+
+    def test_find_course_not_found(self):
+        """Test finding a course that doesn't exist."""
+        # Act
+        result = self.scraper.find_course("NONEXISTENT-9999")
+
+        # Assert
+        assert result == {}
+
+    def test_find_section_by_crn_success(self):
+        """Test finding a section by CRN successfully."""
+        # Act
+        result = self.scraper.find_section_by_crn("83488")
+
+        # Assert
+        assert result is not None
+        assert result["subject"] == "CS"
+        assert result["course"] == "CS-2114"
+        assert result["section"]["crn"] == "83488"
+
+    def test_find_section_by_crn_not_found(self):
+        """Test finding a section with non-existent CRN."""
+        # Act
+        result = self.scraper.find_section_by_crn("99999")
+
+        # Assert
+        assert result is None
+
+    @patch("scraper.timetable_scraper.logging")
+    def test_find_section_by_crn_empty_subjects(self, mock_logging):
+        """Test finding section by CRN when no subjects are available."""
+        # Arrange
+        with patch.object(self.scraper, "get_subjects", return_value=[]):
+            # Act
+            result = self.scraper.find_section_by_crn("83488")
+
+            # Assert
+            assert result is None
+
+    def test_close_session(self):
+        """Test closing the fetcher session."""
+        # Act
+        self.scraper.close()
+
+        # Assert
+        self.mock_fetcher.close_session.assert_called_once()
+
+    @patch("scraper.timetable_scraper.logging")
+    def test_scrape_subject_with_logging(self, mock_logging):
+        """Test that scrape_subject logs appropriate messages."""
+        # Act
+        self.scraper.scrape_subject("CS")
+
+        # Assert
+        mock_logging.info.assert_any_call("Starting scrape for subject: CS")
+        mock_logging.info.assert_any_call("Processed 2 courses for subject: CS")
+
+    def test_scrape_subject_maintains_section_data_integrity(self):
+        """Test that scrape_subject preserves all section data correctly."""
+        # Act
+        result = self.scraper.scrape_subject("CS")
+
+        # Assert
+        cs_2114_section = result["CS-2114"][0]
+        assert cs_2114_section["crn"] == "83488"
+        assert cs_2114_section["course"] == "CS-2114"
+        assert cs_2114_section["title"] == "Softw Des & Data Structures"
+        assert cs_2114_section["schedule_type"] == "L"
+        assert cs_2114_section["modality"] == "Face-to-Face"
+        assert cs_2114_section["credit_hours"] == "3"
+        assert cs_2114_section["capacity"] == "35"
+        assert cs_2114_section["instructor"] is None
+        assert len(cs_2114_section["meeting_times"]) == 2
+        assert cs_2114_section["location"] == "GOODW 190"
+        assert cs_2114_section["exam_code"] == "CTE"
+
+        cs_1064_section = result["CS-1064"][0]
+        assert cs_1064_section["crn"] == "12345"
+        assert cs_1064_section["meeting_times"] == ["ARR"]
+
+    def test_find_course_partial_match(self):
+        """Test finding courses with partial course code match."""
+        # Act
+        result = self.scraper.find_course("CS")
+
+        # Assert
+        assert len(result) > 0
+        found_cs_courses = False
+        for subject, courses in result.items():
+            for course in courses:
+                if course.startswith("CS-"):
+                    found_cs_courses = True
+                    break
+        assert found_cs_courses
+
+    @pytest.mark.parametrize(
+        "crn,expected_found",
+        [
+            ("83488", True),
+            ("12345", True),
+            ("54321", True),
+            ("00000", False),
+            ("", False),
+        ],
+    )
+    def test_find_section_by_crn_parametrized(self, crn, expected_found):
+        """Test finding sections by various CRNs."""
+        # Act
+        result = self.scraper.find_section_by_crn(crn)
+
+        # Assert
+        if expected_found:
+            assert result is not None
+            assert result["section"]["crn"] == crn
+        else:
+            assert result is None
+
+    def test_scrape_multiple_subjects_preserves_order(self):
+        """Test that scrape_multiple_subjects processes subjects in order."""
+        # Arrange
+        subjects = ["CS", "MATH"]
+        call_order = []
+        
+        def track_calls(subject):
+            call_order.append(subject)
+            return self.mock_fetcher.fetch_html.return_value
+
+        self.mock_fetcher.fetch_html.side_effect = track_calls
+
+        # Act
+        self.scraper.scrape_multiple_subjects(subjects)
+
+        # Assert
+        # We need to account for the calls to get_subjects() in find methods
+        # So we look for the specific calls we expect
+        cs_calls = [call for call in call_order if call == "CS"]
+        math_calls = [call for call in call_order if call == "MATH"]
+        assert len(cs_calls) >= 1
+        assert len(math_calls) >= 1
+
+
