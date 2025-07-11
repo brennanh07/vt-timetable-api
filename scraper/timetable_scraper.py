@@ -1,10 +1,12 @@
-from bs4 import BeautifulSoup, Tag
 import json
-from .timetable_fetcher import TimetableFetcher
+import logging
 import re
 from collections import defaultdict
 from typing import Any, Optional
-import logging
+
+from bs4 import BeautifulSoup, Tag
+
+from .timetable_fetcher import TimetableFetcher
 
 logging.basicConfig(
     filename="parse.log",
