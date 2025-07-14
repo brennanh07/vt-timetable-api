@@ -420,11 +420,37 @@ def process_subject_rows(rows: list[Tag]) -> CourseMap:
 
 
 class TimetableScraper:
+    """Scrapes course and section data from the university timetable.
+
+    This class provides methods to fetch, parse, and query timetable information
+    for a specific academic term. It can retrieve subjects, scrape data for
+    one or more subjects, and search for specific courses or sections.
+
+    Attributes:
+        term (str): The academic term to scrape (e.g., "202409").
+        fetcher (TimetableFetcher): An instance of TimetableFetcher to handle
+                                    HTTP requests.
+    """
+
     def __init__(self, term: str) -> None:
+        """Initializes the TimetableScraper for a specific term.
+
+        Args:
+            term (str): The academic term to scrape (e.g., "202409").
+        """
         self.term: str = term
         self.fetcher: TimetableFetcher = TimetableFetcher(term)
 
     def get_subjects(self) -> list[str]:
+        """Retrieves a list of all available subject codes for the term.
+
+        Fetches the main timetable page and parses it to extract all unique
+        subject abbreviations (e.g., 'CS', 'MATH', 'ENGL').
+
+        Returns:
+            list[str]: A list of unique subject codes. Returns an empty list
+                       if fetching or parsing fails.
+        """
         try:
             html = self.fetcher.fetch_html("%")
             if html is None:
@@ -454,7 +480,18 @@ class TimetableScraper:
         return unique_subjects
 
     def scrape_subject(self, subject: str) -> CourseMap:
-        """Scrape data for a single subject."""
+        """Scrapes all course data for a single subject.
+
+        Fetches the timetable page for the given subject, parses the HTML table,
+        and extracts details for all course sections offered under that subject.
+
+        Args:
+            subject (str): The subject code to scrape (e.g., 'CS').
+
+        Returns:
+            CourseMap: A dictionary mapping course codes to a list of their
+                       section data. Returns an empty dictionary if the scrape fails.
+        """
         logging.info(f"Starting scrape for subject: {subject}")
 
         try:
@@ -489,7 +526,18 @@ class TimetableScraper:
         return course_sections_map
 
     def scrape_multiple_subjects(self, subjects: list[str]) -> SubjectMap:
-        """Scrape data for multiple subjects."""
+        """Scrapes course data for a list of subjects.
+
+        Iterates through a list of subject codes and scrapes the data for each one,
+        aggregating the results into a single map.
+
+        Args:
+            subjects (list[str]): A list of subject codes to scrape.
+
+        Returns:
+            SubjectMap: A dictionary mapping each subject code to its corresponding
+                        CourseMap.
+        """
         all_subjects_map: SubjectMap = {}
 
         for subject in subjects:
@@ -500,7 +548,15 @@ class TimetableScraper:
         return all_subjects_map
 
     def scrape_all_subjects(self) -> SubjectMap:
-        """Scrape data for all available subjects."""
+        """Scrapes course data for all available subjects in the term.
+
+        First, it retrieves the list of all subjects, then scrapes the data
+        for each subject.
+
+        Returns:
+            SubjectMap: A comprehensive map of all subjects and their courses
+                        for the term.
+        """
         subjects = self.get_subjects()
         if not subjects:
             logging.error(f"No subjects found for term: {self.term}")
@@ -509,7 +565,19 @@ class TimetableScraper:
         return self.scrape_multiple_subjects(subjects)
 
     def find_course(self, course_code: str) -> dict[str, CourseMap]:
-        """Find a specific course across all subjects."""
+        """Finds a specific course by its code across all subjects.
+
+        This method is useful for searching for a course when the subject is
+        unknown (e.g., cross-listed courses).
+
+        Args:
+            course_code (str): The course code to search for (e.g., "CS 1114").
+
+        Returns:
+            dict[str, CourseMap]: A dictionary where keys are subject codes
+                                  that contain the course, and values are CourseMaps
+                                  filtered to only that course.
+        """
         subjects = self.get_subjects()
         results = {}
 
@@ -524,7 +592,18 @@ class TimetableScraper:
         return results
 
     def find_section_by_crn(self, crn: str) -> Optional[dict[str, Any]]:
-        """Find a specific section by CRN across all subjects."""
+        """Finds a specific course section by its CRN across all subjects.
+
+        Scans all subjects and courses to find the single section that matches
+        the given Course Registration Number (CRN).
+
+        Args:
+            crn (str): The 5-digit CRN of the section to find.
+
+        Returns:
+            Optional[dict[str, Any]]: A dictionary containing the subject, course,
+                                      and section data if found, otherwise None.
+        """
         subjects = self.get_subjects()
 
         for subject in subjects:
@@ -539,6 +618,23 @@ class TimetableScraper:
                         }
         return None
 
+    def get_courses_for_subject(self, subject: str) -> list[str]:
+        """Get the list of courses available for the specified subject.
+
+        Args:
+            subject (str): The subject code to retrieve courses for (e.g., 'CS')
+
+        Returns:
+            list[str]: A list of course codes for the specified subject
+        """
+        subject_all_caps = subject.upper()
+        courses_with_sections = self.scrape_subject(subject_all_caps)
+        courses_list = list(courses_with_sections.keys())
+        return courses_list
+
     def close(self):
-        """Close the fetcher session."""
+        """Closes the underlying HTTP session.
+
+        It's important to call this method when done to release resources.
+        """
         self.fetcher.close_session()
