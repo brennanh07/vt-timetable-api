@@ -632,6 +632,10 @@ class TimetableScraper:
         courses_list = list(courses_with_sections.keys())
         return courses_list
 
+    # NOTE: Should probably change this and other functions later to directly put the
+    # specified course in the payload to the timetable in scraper.timetable_fetcher.
+    # This implementation scrapes and returns a lot of unnecessary data (all courses and
+    # sections for the specified subject)
     def get_all_sections_for_course(self, course: str) -> list[SectionData]:
         """Retrieves all sections for a specific course.
 
