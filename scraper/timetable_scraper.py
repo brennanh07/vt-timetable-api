@@ -632,6 +632,39 @@ class TimetableScraper:
         courses_list = list(courses_with_sections.keys())
         return courses_list
 
+    def get_all_sections_for_course(self, course: str) -> list[SectionData]:
+        """Retrieves all sections for a specific course.
+
+        Fetches all sections for a given course code by first scraping the
+        entire subject and then filtering for the specific course.
+
+        Args:
+            course (str): The course identifier in "SUBJECT-####" format
+                          (e.g., "CS-2114").
+
+        Returns:
+            list[SectionData]: A list of dictionaries, where each dictionary
+                               represents a course section. Returns an empty
+                               list if the course is not found.
+
+        Raises:
+            ValueError: If the course code does not match the expected
+                        "SUBJECT-####" format.
+        """
+        # course = "CS-2114"
+        course_pattern = re.compile(r"^[A-Za-z]+-\d{4}$")
+        if not course_pattern.match(course):
+            raise ValueError(
+                f"Invalid course format: '{course}'. Expected format like 'CS-2114'."
+            )
+
+        subject, course_num = course.split("-")
+        subject_all_caps = subject.upper()
+        courses = self.scrape_subject(subject_all_caps)
+        course_formatted = subject_all_caps + "-" + course_num
+        course_sections = courses[course_formatted]
+        return course_sections
+
     def close(self):
         """Closes the underlying HTTP session.
 
